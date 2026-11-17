@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Mordecai</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main class="login">
+  <div class="login-card">
+    <div class="login-brand">
+      <img src="/static/logo.svg" width="96" height="96" alt="">
+      <div>
+        <h1>Mordecai</h1>
+        <p>Agentic Security Operations</p>
+      </div>
+    </div>
+    <form id="login-form" class="login-form" novalidate>
+      <section id="consent" class="thread-sec" hidden>
+        <h2>Notice and consent</h2>
+        <div id="consent-text" class="consent-text" tabindex="0" aria-label="Notice and consent text"></div>
+        <label class="check" for="consent-check">
+          <input type="checkbox" id="consent-check">
+          <span>I have read and consent to the notice above.</span>
+        </label>
+      </section>
+      <div id="token-row" class="thread-sec">
+        <label for="token" class="label">Access token</label>
+        <input id="token" type="password" autocomplete="off" spellcheck="false" aria-describedby="token-hint">
+        <p class="hint" id="token-hint">New at every start: scripts/start.sh prints it.</p>
+      </div>
+      <p id="token-note" class="hint" hidden>Using the access token from your sign-in link.</p>
+      <div id="no-account" class="form-error" role="alert" hidden>No dashboard account exists yet. On the host, run <code>mordecai account create</code> (scripts/start.sh asks for it).</div>
+      <div class="thread-sec">
+        <label for="username" class="label">Username</label>
+        <input id="username" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="64">
+      </div>
+      <div class="thread-sec">
+        <label for="password" class="label">Password</label>
+        <input id="password" type="password" autocomplete="current-password" maxlength="1024">
+      </div>
+      <div id="login-error" class="form-error" role="alert" hidden></div>
+      <button class="btn btn-primary btn-lg" type="submit" id="login-btn">Sign in</button>
+    </form>
+    <p class="login-foot">Every action you take here is recorded in a tamper-evident audit log.</p>
+  </div>
+</main>
+<script src="/static/login.js"></script>
+</body>
+</html>

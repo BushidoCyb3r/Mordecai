@@ -1,0 +1,82 @@
+# Rules and reference data the local tools read. Each set is fetched ONCE into data/ (git-ignored) and used from
+# there: nothing is downloaded while the harness runs.
+#
+#   scripts/install.sh                 asks about each set that is not installed yet (Enter takes the default)
+#   scripts/install.sh --rules all     no questions: all | none | a comma list (yara,sigma,...)
+#   mordecai rules status | fetch SET... | fetch --all | setup     the same, at any time
+#
+# Air-gapped network: on a host with internet access (same version of this repository) run
+#   mordecai rules fetch yara sigma ...        # or scripts/install.sh there
+#   mordecai rules bundle rules.tar.gz         # prints the bundle's SHA-256
+# carry rules.tar.gz across, then on the air-gapped host
+#   scripts/install.sh --rules-from rules.tar.gz         (or: mordecai rules import rules.tar.gz --sha256 <hex>)
+#
+# url: https://..., an internal mirror, or a path on this host (a mounted share). {capa} is replaced by the
+# installed flare-capa version, so the rules match the capa that reads them.
+# format: zip | tar.gz | file (default: from the url). strip: drop this top-level folder of the archive (glob).
+# dest: where it goes, under data/. default: the answer Enter gives in the installer.
+# Site changes (a mirror, a set of your own, enabled: false) go in config/rules.local.yaml, same shape, merged by name.
+sets:
+  attack:
+    what: MITRE ATT&CK Enterprise (STIX) - hunt plans, emulation plans, coverage layers
+    url: https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json
+    format: file
+    dest: attack/enterprise-attack.json
+    check: attack
+    size: about 45 MB
+    license: MITRE ATT&CK terms of use
+    default: true
+  yara:
+    what: YARA rules (YARA Forge core package) - local_yara_scan
+    url: https://github.com/YARAHQ/yara-forge/releases/latest/download/yara-forge-rules-core.zip
+    dest: rules/yara
+    size: a few MB
+    license: each rule keeps its upstream license (listed in the package)
+    default: true
+  sigma:
+    what: Sigma rules (SigmaHQ core package) - local_evtx_hunt (chainsaw), Sigma conversion and back-tests
+    url: https://github.com/SigmaHQ/sigma/releases/latest/download/sigma_core.zip
+    dest: rules/sigma
+    size: a few MB
+    license: Detection Rule License 1.1
+    default: true
+  capa:
+    what: capa rules matching the installed capa (pip flare-capa; the standalone capa binary has its own) - local_capa
+    url: https://github.com/mandiant/capa-rules/archive/refs/tags/v{capa}.zip
+    strip: "*"
+    dest: rules/capa
+    size: a few MB
+    license: Apache-2.0
+    default: true
+  volatility-windows:
+    what: Volatility 3 Windows symbol tables - memory analysis without fetching symbols from Microsoft
+    url: https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip
+    strip: windows
+    dest: rules/volatility-symbols/windows
+    size: large (hundreds of MB)
+    license: Volatility Foundation symbol packs
+    default: false
+  volatility-linux:
+    what: Volatility 3 Linux symbol tables (common distribution kernels)
+    url: https://downloads.volatilityfoundation.org/volatility3/symbols/linux.zip
+    strip: linux
+    dest: rules/volatility-symbols/linux
+    size: large (hundreds of MB)
+    license: Volatility Foundation symbol packs
+    default: false
+  volatility-mac:
+    what: Volatility 3 macOS symbol tables
+    url: https://downloads.volatilityfoundation.org/volatility3/symbols/mac.zip
+    strip: mac
+    dest: rules/volatility-symbols/mac
+    size: large (hundreds of MB)
+    license: Volatility Foundation symbol packs
+    default: false
+  nuclei-templates:
+    what: nuclei templates - vulnerability assessment (vuln_run nuclei -duc -t <folder>)
+    url: https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.zip
+    strip: "*"
+    dest: rules/nuclei-templates
+    size: about 50 MB
+    license: MIT
+    default: false

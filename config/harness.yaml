@@ -1,0 +1,325 @@
+# Mordecai - harness configuration
+# Secrets are referenced as ${ENV_VAR} and never written here. See config/env.example.
+
+harness:
+  # default_model: set in models.yaml (default_model:); per run: --model <profile> or MORDECAI_MODEL=<profile>
+  operator: ${MORDECAI_OPERATOR:-analyst}  # recorded in the audit log as the approving analyst
+  policy: ${MORDECAI_POLICY:-policy.yaml}           # site copy (e.g. policy.local.yaml, git-ignored) via MORDECAI_POLICY
+  cases_dir: ../cases
+  evidence_roots: [../evidence]      # local forensic tools can only read under these (plus the case dir)
+  forensics_dir: ../forensics        # per-case drop folders <forensics_dir>/<case-id>/ - drop artifacts there;
+                                     # always an evidence root, and where the forensics playbook looks first
+  max_steps: 40                      # tool-use steps per agent turn
+  max_tool_result_chars: 12000       # larger outputs spill to the case dir; size this to your model's context
+
+# ---------------------------------------------------------------------------
+# Model profiles: the choices in the dashboard's model picker and for --model. They live in their own file,
+# models.yaml (shipped with gateway, Claude, ChatGPT and local profiles, plus a template for your own local model),
+# merged with models.local.yaml (git-ignored) for site-specific profiles. Paths are relative to this file.
+# (A `models:` section here still works and is merged first.)
+# ---------------------------------------------------------------------------
+models_file: models.yaml
+
+# ---------------------------------------------------------------------------
+# MITRE ATT&CK (local STIX bundles) for actor-based hunt planning (hunt_planner expert, hunt_plan playbook).
+# Get the data with `mordecai attack fetch`, or copy enterprise-attack.json from
+# github.com/mitre-attack/attack-stix-data on air-gapped networks. ATTACK_STIX (comma-separated) overrides.
+# ---------------------------------------------------------------------------
+attack:
+  stix: [../data/attack/enterprise-attack.json]
+
+# ---------------------------------------------------------------------------
+# Vulnerability assessment (vuln_assessor expert, vulnerability_assessment playbook). Every action is approved
+# by the analyst. vuln_run runs one allowlisted program per call, argv only (no shell), against targets inside
+# the policy scope (scope.allowed_targets must be set), with output kept in cases/<case>/vuln_assessment/raw/.
+# Defaults suit a Kali VM; on other hosts only the installed tools are offered.
+# ---------------------------------------------------------------------------
+vuln_assessment:
+  timeout_s: 900                    # per command (the agent may ask for up to max_timeout_s)
+  max_timeout_s: 3600
+  # tools: [nmap, nuclei, ...]      # replace the built-in allowlist (see mordecai/tools/vulnscan.py)
+  extra_tools: []                   # add programs to the built-in allowlist
+  deny_args: {}                     # more refused options per program, regexes over the argument string,
+                                    #   e.g. {nmap: ["-T5"], "*": ["--proxy"]}
+  # read_dirs: [/usr/share, /opt]   # absolute paths the tools may read (wordlists, templates)
+
+# ---------------------------------------------------------------------------
+# Adversary emulation planning (emulation_planner expert, emulation_plan playbook). Defensive and plans only: no
+# exploitation, no exploit code, nothing destructive, and the harness never runs an emulation. Steps name the
+# emulation tools below by reference (an Atomic Red Team test number, a Mythic command), never by code.
+# ---------------------------------------------------------------------------
+emulation:
+  emulation_tools: [Atomic Red Team, Mythic]
+  # atomics_dir: /opt/atomic-red-team/atomics   # a local checkout, so steps name real test numbers (never downloaded
+                                                #   automatically; the plans show test names, not their commands)
+
+# ---------------------------------------------------------------------------
+# Reports (reporter expert, report playbook). Drop old reports into examples_dir/<report type>/ (.docx, .md,
+# .txt): they teach the format only and are never a source of facts. Default: reports/examples next to cases/.
+# ---------------------------------------------------------------------------
+reports: {}
+  # examples_dir: ../reports/examples
+
+# ---------------------------------------------------------------------------
+# Expert agents (definitions in mordecai/experts/*.md; add your own in extra_dir)
+# Route experts to different models: e.g. a big model for the orchestrator/hunter, a small fast one for triage.
+# ---------------------------------------------------------------------------
+experts:
+  extra_dir: experts              # optional dir of additional/overriding expert .md files (relative to this file)
+  overrides:
+    # alert_triage: {model: local-ollama, max_steps: 20}
+    # forensicator: {model: org-gateway}
+  disabled: []
+
+# ---------------------------------------------------------------------------
+# Orchestration: the orchestrator is the orchestrator; experts run as subagents it spawns and follows up with
+# ---------------------------------------------------------------------------
+orchestration:
+  max_parallel: 4            # subagents working at once (lower it for a single local GPU)
+  # A subagent report reaches the orchestrator in full. After this many more orchestrator model calls it is shortened in the orchestrator's
+  # context to its bottom line, key facts, open questions, recommended tasks and the identifiers in its details
+  # (case_get shows it in full again). Long investigations then fit small contexts. 0 = always keep reports in full.
+  report_full_calls: 2
+  reflect_on_retro: true     # retrospective: every subagent reflects on its work and revises its skills
+  # The orchestrator's own tools. It orchestrates, so it keeps overview tools only and experts do the detailed work.
+  # Tool schemas are most of a prompt: the full set is ~80 tools / ~10K tokens, this list ~25 tools.
+  # ["*"] gives the orchestrator every tool (slow and memory-hungry on local models).
+  lead_tools: ["subagent_*", "case_*", "memory_*", "*__alerts_summary", "*__notable_events", "*__list_clients",
+               "local_case_evidence", "hunt_plan_list", "emulation_plan_list", "report_list"]
+
+# ---------------------------------------------------------------------------
+# Budgets: limits per operation (an investigation, a retrospective, a resume), over every agent together. A run that
+# reaches one stops cleanly, like Stop, and says which; send a new message to carry on. 0 = no limit.
+# On a hosted model (Claude) tokens are billed: set these to what you are willing to spend on one run.
+# ---------------------------------------------------------------------------
+budgets:
+  max_tokens: 4000000        # input + output tokens as billed: cache reads count at cached_weight
+  cached_weight: 0.1         # Anthropic bills prompt-cache reads at about a tenth of normal input
+  max_tool_calls: 500
+  max_minutes: 90
+
+# ---------------------------------------------------------------------------
+# Credential redaction: credential values in tool output (API keys, bearer tokens, passwords, private keys, the
+# secrets in config/.env, ...) are detected by patterns and replaced in returned tool text before model/UI/
+# transcript use. Tool-generated files and original evidence remain unchanged and may still contain secrets.
+# The same value gets the same fingerprint, keyed with config/secrets/redaction.key (SETUP.md section 10).
+# ---------------------------------------------------------------------------
+redaction:
+  enabled: true
+  patterns: []               # extra regular expressions for your own secret formats; the whole match is replaced
+
+# ---------------------------------------------------------------------------
+# Learning: the retrospective turns an operation into memories and skill changes for you to review
+# (dashboard: Learning). It uses model time, so turn it off on a slow local model.
+# ---------------------------------------------------------------------------
+learning:
+  auto_retro: true           # run the retrospective by itself when a playbook run completes
+  every_n_investigations: 0        # also after every N completed investigations without a playbook (0 = never)
+  # Never automatic in a conversation where every action needs your approval (the vulnerability assessment):
+  # run it yourself there, and approve each step.
+
+# ---------------------------------------------------------------------------
+# Tool onboarding: the tool_integrator turns a tool you supplied into a declarative adapter, and nothing is usable
+# until you approve the proposal (dashboard: Learning; CLI: mordecai tools). Every run of a tool that is not
+# approved yet waits for your approval, and every run of an onboarded binary happens in the sandbox (onboarded MCP
+# and OpenAPI tools are not processes here: they are calls to their server).
+# ---------------------------------------------------------------------------
+tool_onboarding:
+  specs_dir: ../tool_specs   # approved adapters, proposals and trial runs (git-ignored)
+  tool_roots: [/opt, /usr/local, ~/tools]  # put tools you supply here: the integrator looks nowhere else
+  sandbox: bwrap             # bubblewrap: no network (unless the approved adapter allows it), read-only system, only the tool's folder and its evidence
+                             # visible, writes only to its output folder | none (not recommended)
+
+# ---------------------------------------------------------------------------
+# Expert skills: versioned procedures the team writes, uses, scores and revises (stored in the memory DB)
+# ---------------------------------------------------------------------------
+skills:
+  require_approval: true     # agent-written skills/revisions wait for analyst review (poisoning defense)
+  index_k: 12                # skills listed in a subagent's brief (most relevant first)
+  max_body_chars: 8000
+  max_pending_per_skill: 3   # unreviewed revisions an agent may queue per skill
+
+# ---------------------------------------------------------------------------
+# Chat history: every conversation is kept until you delete it (mordecai history delete / dashboard)
+# ---------------------------------------------------------------------------
+history:
+  db_path: ../cases/_history.db
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+dashboard:
+  consent_text: ""           # notice and consent shown before sign-in; acknowledging it is required and audited
+  # Sign-in = this start's access token (new at every start) + the dashboard account's username and password.
+  account_file: secrets/dashboard_account.json   # created by `mordecai account create` / the first start;
+                                                 # salted PBKDF2-SHA256 hash, mode 600 (relative to this file)
+  session_idle_hours: 12     # a sign-in ends after this long without analyst activity, and at every restart
+  session_max_hours: 12      # ... and after this long whatever the activity (sign in again; operations keep running)
+  session_bind_client: true  # a session works only from the address that signed in (off behind a proxy that
+                             # changes the client address per request)
+  # scripts/start.sh defaults (its options override them). Start and stop never touch cases, conversations,
+  # memory, skills or audit logs.
+  serve:
+    host: 0.0.0.0            # 0.0.0.0 = every interface, over HTTPS (other devices can connect); 127.0.0.1 = this host only
+    port: 8765
+    case: ""                 # "" = the most recently used case
+    posture: observe         # start safe; `scripts/start.sh --posture respond` allows response actions
+    model: ""                # "" = default_model in models.yaml (or MORDECAI_MODEL)
+    tls_cert: secrets/tls/dashboard.crt   # self-signed for every address of this host; made by start.sh, renewed
+    tls_key: secrets/tls/dashboard.key    #   before expiry or when the host's addresses change
+    run_dir: ../run          # pid, log and the current token (mode 700, git-ignored)
+  # Opening hunt plans (and hunt results / Navigator layers) from the dashboard in an editor.
+  editors:
+    # A browser on the dashboard's own host gets "Open in <editor>": the server launches VS Code, Obsidian, the
+    # desktop's default text editor or another installed editor on the host's screen. Audited. Set false if the
+    # dashboard sits behind a reverse proxy on this host (every viewer would look local).
+    open_on_host: true
+    # Browsers elsewhere get links that open the file on the viewer's own computer (same path needed, or Remote-SSH).
+    links: [vscode, obsidian]
+    # VS Code Remote-SSH target, e.g. "ssh-remote+soc-box": VS Code links then open the file on this host over SSH.
+    vscode_remote: ""
+
+# ---------------------------------------------------------------------------
+# Learning memory
+# ---------------------------------------------------------------------------
+memory:
+  db_path: ../memory/mordecai_memory.db
+  retrieve_k: 8
+  # Agent-written memories land as 'candidate' until an analyst promotes them (mordecai memory review).
+  # Listing a kind here skips review for it. Keep this empty in contested environments (memory poisoning).
+  auto_promote_kinds: []
+
+# ---------------------------------------------------------------------------
+# MCP connectors - launched as stdio subprocesses by the harness (module:) or reached over HTTP (url:).
+# Third-party MCP servers work too (command:/args: or url:). Tools appear as <server>__<tool>.
+# A connector sees only the variables in its env: block (not the rest of config/.env). Every connector's settings
+# are listed in the "Env:" line at the top of its module (mordecai/servers/<name>.py); to use one that
+# is not below, add it here, e.g.  SO_MAX_HITS: ${SO_MAX_HITS:-200}
+# ---------------------------------------------------------------------------
+mcp_servers:
+  security_onion:
+    enabled: ${SO_ENABLED:-false}
+    module: mordecai.servers.security_onion
+    env:
+      SO_URL: ${SO_URL:-}
+      SO_API_KEY: ${SO_API_KEY:-}            # preferred: read-only API key
+      SO_USER: ${SO_USER:-}
+      SO_PASS: ${SO_PASS:-}
+      SO_VERIFY: ${SO_VERIFY:-true}          # /etc/pki/ca.crt from the manager
+      SO_INDEX: ${SO_INDEX:-logs-*-so}
+      SO_ALERT_INDEX: ${SO_ALERT_INDEX:-logs-*.alerts-so}
+      SO_ZEEK_INDEX: ${SO_ZEEK_INDEX:-logs-zeek-so}
+      SO_ALERT_QUERY: ${SO_ALERT_QUERY:-}    # optional extra filter applied to every alert query
+      SO_DETECTION_INDEX: ${SO_DETECTION_INDEX:-so-detection}   # SO's detection store (detection_coverage)
+      SO_SEARCH_TIMEOUT: ${SO_SEARCH_TIMEOUT:-60s}  # the limit the cluster enforces on each search
+
+  # Security Onion Pro only: the official SO MCP server (Connect API, OQL queries, playbooks).
+  # Install/configure it per github.com/Security-Onion-Solutions/securityonion-mcp (API client from
+  # SOC Administration -> API Clients), then add it here with command:/args:/env: (stdio) or url: (HTTP).
+  # Its tools will appear as security_onion_pro__<tool>; add policy rules for them (default tier is approve).
+
+  splunk:
+    enabled: ${SPLUNK_ENABLED:-false}
+    module: mordecai.servers.splunk
+    env:
+      SPLUNK_URL: ${SPLUNK_URL:-}
+      SPLUNK_TOKEN: ${SPLUNK_TOKEN:-}
+      SPLUNK_VERIFY: ${SPLUNK_VERIFY:-true}
+      SPLUNK_EXTRA_COMMANDS: ${SPLUNK_EXTRA_COMMANDS:-}  # more read-only SPL commands to allow (comma list)
+      SPLUNK_ALLOW_MACROS: ${SPLUNK_ALLOW_MACROS:-}      # macros agents may use (comma list, or *)
+
+  elastic:
+    enabled: ${ES_ENABLED:-false}
+    module: mordecai.servers.elastic
+    env:
+      ES_URL: ${ES_URL:-}
+      ES_API_KEY: ${ES_API_KEY:-}
+      ES_VERIFY: ${ES_VERIFY:-true}
+      ES_DEFAULT_INDEX: ${ES_DEFAULT_INDEX:-logs-*}
+      ES_SEARCH_TIMEOUT: ${ES_SEARCH_TIMEOUT:-60s}  # the limit the cluster enforces on each search
+
+  # Velociraptor is split by privilege (least privilege): most experts get the investigator connector;
+  # only the four admin-only tools come from a separate administrator key. With a single admin key,
+  # point both VELO_API_CONFIG and VELO_ADMIN_API_CONFIG at it and enable both.
+  velociraptor:
+    enabled: ${VELO_ENABLED:-false}
+    module: mordecai.servers.velociraptor
+    timeout_s: 900
+    exclude_tools: [download_flow_uploads, quarantine_host, unquarantine_host, run_server_vql]
+    env:
+      VELO_API_CONFIG: ${VELO_API_CONFIG:-}  # role: investigator,api
+      VELO_ORG_ID: ${VELO_ORG_ID:-}
+      VELO_DOWNLOAD_DIR: ${VELO_DOWNLOAD_DIR:-}
+
+  velociraptor_admin:
+    enabled: ${VELO_ADMIN_ENABLED:-false}
+    module: mordecai.servers.velociraptor
+    timeout_s: 3600
+    include_tools: [download_flow_uploads, quarantine_host, unquarantine_host, run_server_vql]
+    env:
+      VELO_API_CONFIG: ${VELO_ADMIN_API_CONFIG:-}  # role: administrator,api
+      VELO_ORG_ID: ${VELO_ORG_ID:-}
+      VELO_DOWNLOAD_DIR: ${VELO_DOWNLOAD_DIR:-}  # empty = <vault>/velociraptor (evidence/vault/velociraptor); a folder outside the vault is replaced
+
+  misp:
+    enabled: ${MISP_ENABLED:-false}
+    module: mordecai.servers.misp
+    env:
+      MISP_URL: ${MISP_URL:-}
+      MISP_KEY: ${MISP_KEY:-}
+      MISP_VERIFY: ${MISP_VERIFY:-true}
+      MISP_FEED_STALE_DAYS: ${MISP_FEED_STALE_DAYS:-7}  # a feed cache older than this is marked stale
+
+  opencti:
+    enabled: ${OPENCTI_ENABLED:-false}
+    module: mordecai.servers.opencti
+    env:
+      OPENCTI_URL: ${OPENCTI_URL:-}
+      OPENCTI_TOKEN: ${OPENCTI_TOKEN:-}  # token of a read-only OpenCTI user
+      OPENCTI_VERIFY: ${OPENCTI_VERIFY:-true}
+
+  # Archer: beaconing, exfiltration, lateral movement, DNS tunneling and threat-intel findings from Zeek, with
+  # per-host roll-ups. Read-only, with a Viewer account (the connector refuses any other role).
+  archer:
+    enabled: ${ARCHER_ENABLED:-false}
+    module: mordecai.servers.archer
+    env:
+      ARCHER_URL: ${ARCHER_URL:-https://localhost:8443}
+      ARCHER_EMAIL: ${ARCHER_EMAIL:-}          # the account's email, not its display name
+      ARCHER_PASSWORD: ${ARCHER_PASSWORD:-}
+      ARCHER_TLS_FINGERPRINT: ${ARCHER_TLS_FINGERPRINT:-}  # pins Archer's self-signed certificate (recommended)
+      ARCHER_VERIFY: ${ARCHER_VERIFY:-true}    # only without a fingerprint: true | /path/ca.pem | false (no check)
+      ARCHER_MAX_CHARS: ${ARCHER_MAX_CHARS:-11000}  # keep under max_tool_result_chars above
+
+  # example third-party server:
+  # misp:
+  #   command: /opt/mcp/misp-mcp
+  #   args: []
+  #   env: {MISP_URL: "${MISP_URL}", MISP_KEY: "${MISP_KEY}"}
+  #   quarantine: true   # a new server: its tools are listed but cannot be called, and its annotations are not
+  #                      # trusted, until you approve an onboarding proposal that gives each tool a tier and experts
+
+# ---------------------------------------------------------------------------
+# Local forensic tooling
+# ---------------------------------------------------------------------------
+forensics:
+  default_timeout_s: 900
+  # Rule folders. Empty: the sets fetched once by scripts/install.sh / `mordecai rules` into data/rules/ (see
+  # config/rules.yaml), so nothing is downloaded at run time. A relative path counts from this config folder.
+  yara_rules_dir: ${YARA_RULES:-}
+  sigma_rules_dir: ${SIGMA_RULES:-}
+  capa_rules_dir: ${CAPA_RULES:-}          # capa-rules checkout (not needed for the standalone capa binary)
+  volatility_symbols_dir: ${VOL_SYMBOLS:-} # Volatility 3 symbol packs (windows/ linux/ mac/); --offline too when Volatility has it (2.4+)
+  ez_tools_dir: ${EZ_TOOLS_DIR:-}          # Eric Zimmerman tools (.NET 9 build); needs `dotnet` on Linux
+  memprocfs_python: ${MEMPROCFS_PYTHON:-}  # python with `pip install memprocfs` (default: this interpreter)
+  aleapp_path: ${ALEAPP_PATH:-}            # path to aleapp.py
+  ileapp_path: ${ILEAPP_PATH:-}            # path to ileapp.py
+  leapp_python: ${LEAPP_PYTHON:-}          # python with ALEAPP/iLEAPP requirements (default: this interpreter)
+  binaries:            # override executable names/paths if they differ on your workstation
+    volatility: vol
+    log2timeline: log2timeline.py
+    psort: psort.py
+    # chainsaw_mapping: /opt/chainsaw/mappings/sigma-event-logs-all.yml   # chainsaw needs it for Sigma rules
+  allowed_binaries:    # what local_run may execute (argv only, no shell). Never exiftool: use local_exiftool
+    [fls, icat, ils, mmls, fsstat, istat, tsk_recover, mactime, bulk_extractor, ssdeep, sha256sum,
+     evtxexport, regripper, rip.pl, densityscout, pescan, olevba, oledump.py, pdfid.py, pdf-parser.py, floss, diec]

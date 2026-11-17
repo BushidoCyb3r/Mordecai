@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mordecai</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<a class="skip-link" href="#composer">Skip to the message box</a>
+<div class="app">
+  <nav id="side" class="side" aria-label="Sidebar"></nav>
+  <main id="main" class="main">
+    <div id="view-ops" class="view"></div>
+    <div id="view-page" class="view" hidden></div>
+  </main>
+  <aside id="insp" class="insp" aria-label="Case panel" hidden></aside>
+</div>
+<div id="overlays"></div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<div id="announcer" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

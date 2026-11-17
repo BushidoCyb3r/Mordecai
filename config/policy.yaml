@@ -1,0 +1,138 @@
+# Mordecai - action policy (enforced in code on every tool call)
+#
+# tiers:  auto (run) | notify (run + announce) | approve (analyst must approve) | deny (never)
+# posture: observe -> approve-tier actions are denied outright, except rules marked `observe: ask`
+#                     (endpoint collection, evidence download): those can still be requested and approved
+#          respond -> every approve-tier action is allowed once the analyst approves it
+# A `deny` rule wins wherever it sits: a call that any deny rule matches never runs, even when a broader
+# rule above it would allow it, and it matches tool names and argument values in any case. Among the other
+# rules, the first match (top to bottom) wins, as written. `args` narrows a rule to specific argument values
+# (glob patterns; all listed keys must match). For a list argument every item must match, except in a deny rule,
+# where one matching item is enough.
+
+posture: respond
+default_tier: approve           # unknown / new tools always need approval
+
+# Trust read_only / destructive annotations only from our own connector servers.
+trust_annotations_from: [security_onion, splunk, elastic, velociraptor, velociraptor_admin, misp, opencti, archer]
+
+scope:
+  enforce: true
+  # tool arguments treated as targets for active (notify/approve) actions. Velociraptor client ids are
+  # resolved to hostname / fqdn / last IP, so CIDR and hostname entries below apply to them too;
+  # an id that cannot be resolved is out of scope (fail closed) unless the id itself matches an allowed entry.
+  target_arg_keys: [host, hostname, ip, client_id, target]
+  # authorized terrain - CIDRs, hostname globs, or Velociraptor client ids. Empty list = no restriction.
+  allowed_targets: []
+    # - 10.0.0.0/8
+    # - "*.corp.example.org"
+    # - "C.*"
+  # always escalate to approval, even if a rule says auto/notify (domain controllers, safety systems...). Except auto-tier
+  # calls that cannot act on the asset: reads a trusted connector marks read-only, and the harness's own tools (case notes,
+  # memory, plans, reports, local file analysis).
+  protected_assets: []
+    # - "C.1234567890abcdef"
+    # - 10.0.1.5
+
+# Gate everything: every action by these experts, and by any agent in a conversation that ran these playbooks (or
+# used these experts), needs an analyst's approval - reads included. Built in: the vuln_assessor and the
+# vulnerability_assessment playbook. Lists here add to those; they cannot remove them.
+gate_everything:
+  experts: []
+  playbooks: []
+
+rules:
+  # --- harness internals --------------------------------------------------
+  - {match: "case_*",   tier: auto}
+  - {match: "memory_*", tier: auto}
+  - {match: "subagent_*", tier: auto, note: "orchestrator spawns / follows up with expert subagents"}
+  - {match: "submit_report", tier: auto, note: "subagent report to the orchestrator"}
+  - {match: "skill_*", tier: auto, note: "agent-written skill versions still need analyst approval before use"}
+
+  # --- local forensics (read-only, jailed to evidence roots) -------------
+  # exiftool is not here and local_run refuses it in code: its -if, -p and -config options run Perl, and it can
+  # rewrite files. local_exiftool runs it with fixed, read-only arguments.
+  - {match: "local_run", tier: notify, args: {binary: [fls, icat, ils, mmls, fsstat, istat, mactime, sha256sum, ssdeep]},
+     note: "read-only Sleuth Kit / hashing"}
+  - {match: "local_run", tier: approve, args: {binary: [olevba, pescan]},
+     note: "static parsers: they read the file and print, and load no plugins; each run is approved (check which file and why)"}
+  # oledump.py, pdfid.py and pdf-parser.py can load Python plugin and decoder files (-p / --plugins, -D / --decoders),
+  # and evidence paths are allowed as arguments, so a plugin could come from attacker-controlled evidence. diec can load
+  # signature scripts from a folder; densityscout can write an output file. They stay at approve.
+  - {match: "local_run", tier: approve,
+     note: "check the arguments: no plugin or decoder options (-p, --plugins, -D, --decoders) on oledump.py, pdfid.py or pdf-parser.py"}
+  - {match: "local_plaso_timeline", tier: notify, note: "long-running"}
+  - {match: "local_leapp", tier: notify, note: "long-running mobile parse"}
+  - {match: "local_*",  tier: auto}
+  # --- tool onboarding: running a tool that is not approved yet (sandboxed) needs the analyst, every time ---
+  - {match: "onboard_help",    tier: approve, observe: ask, note: "runs a new binary's help/version in the sandbox (no network, read-only)"}
+  - {match: "onboard_trial",   tier: approve, observe: ask, note: "runs a draft tool on sample evidence in the sandbox (no network, read-only)"}
+  - {match: "onboard_propose", tier: notify, note: "submits an onboarding proposal for the analyst to review"}
+  - {match: "onboard_*",       tier: auto}
+  - {match: "learning_recommend", tier: auto, note: "the review records what it recommends; the analyst decides"}
+
+  # --- SIEM / NSM connectors (read-only by construction) ------------------
+  - {match: "security_onion__*", tier: auto}
+  - {match: "splunk__*",         tier: auto}
+  - {match: "elastic__*",        tier: auto}
+  - {match: "attack_*",          tier: auto, note: "local MITRE ATT&CK knowledge (read-only)"}
+  - {match: "hunt_plan_*",       tier: auto, note: "hunt plans folder in the case (plans and results)"}
+  - {match: "emulation_*",             tier: auto, note: "Emulation plans folder in the case: plans only, nothing is run"}
+  - {match: "report_finalize",   tier: approve, observe: ask, note: "a report becomes final only with the analyst's approval"}
+  - {match: "report_*",          tier: auto, note: "report drafts from case data, verified before saving"}
+  # Vulnerability assessment (vuln_assessor). Every vuln_* call needs approval no matter what (built-in floor);
+  # observe: ask lets the analyst approve scans one by one in OBSERVE posture too. Set observe: deny to forbid that.
+  - {match: "vuln_*",            tier: approve, observe: ask, note: "vulnerability assessment: scanners and their output, each approved"}
+
+  # --- Velociraptor: visibility vs. response ------------------------------
+  # Human in the loop: everything that runs on, changes, or pulls files from an endpoint needs an analyst's
+  # approval. This is also enforced in code (policy.HUMAN_GATED): auto/notify here is raised to approve.
+  # `observe: ask` lets an investigation action be requested (and approved) in OBSERVE posture; response
+  # actions (quarantine, server VQL) stay denied in OBSERVE.
+  # Remote command execution on endpoints by an agent is denied by default. If your policy allows it,
+  # change these to `approve` (never auto/notify).
+  - match: "velociraptor*__collect_artifact"
+    tier: deny
+    note: "remote shell artifacts"
+    args: {artifact: ["*.System.PowerShell", "*.System.CmdShell", "*.Sys.BashShell"]}
+  - match: "velociraptor*__create_hunt"
+    tier: deny
+    note: "remote shell artifacts fleet-wide"
+    args: {artifact: ["*.System.PowerShell", "*.System.CmdShell", "*.Sys.BashShell"]}
+  - {match: "velociraptor*__list_*",      tier: auto}
+  - {match: "velociraptor*__client_info", tier: auto}
+  - {match: "velociraptor*__client_flows", tier: auto}
+  - {match: "velociraptor*__artifact_info", tier: auto}
+  - {match: "velociraptor*__flow_*",      tier: auto}
+  - {match: "velociraptor*__hunt_results", tier: auto}
+  - {match: "velociraptor*__download_flow_uploads", tier: approve, observe: ask, note: "pulls files from the endpoint into the evidence vault (may include live executables)"}
+  - {match: "velociraptor*__label_client", tier: approve, observe: ask, note: "labels can target hunts"}
+  - {match: "velociraptor*__cancel_flow",  tier: notify}
+  - {match: "velociraptor*__acquire_memory", tier: approve, observe: ask, note: "full RAM image - heavy transfer"}
+  - match: "velociraptor*__collect_artifact"
+    tier: approve
+    observe: ask
+    note: "triage artifact - runs on the endpoint"
+    args:
+      artifact: [Generic.Client.Info, Windows.System.Pslist, Windows.Network.Netstat, Windows.Network.NetstatEnriched*,
+                 Windows.Sys.StartupItems, Windows.System.Services, Windows.System.TaskScheduler, Windows.Sys.Users,
+                 Windows.Forensics.Prefetch, Windows.Persistence.PermanentWMIEvents, Linux.Sys.Pslist,
+                 Linux.Network.Netstat, Linux.Sys.Crontab, Linux.Sys.Users, MacOS.System.Pslist]
+  - {match: "velociraptor*__collect_artifact", tier: approve, observe: ask, note: "collection - runs on the endpoint, may upload files"}
+  - {match: "velociraptor*__create_hunt",      tier: approve, observe: ask, note: "fleet-wide collection"}
+  - {match: "velociraptor*__quarantine_host",  tier: approve, note: "disruptive containment"}
+  - {match: "velociraptor*__unquarantine_host", tier: approve}
+  - {match: "velociraptor*__run_server_vql",   tier: approve, note: "arbitrary server VQL"}
+
+  # --- threat intel ---------------------------------------------------------------
+  # A false_positive sighting always needs approval (built-in floor): it tells MISP an indicator is harmless.
+  - {match: "misp__add_sighting",  tier: notify, note: "writes a sighting to MISP"}
+  - {match: "misp__create_event",  tier: approve, note: "creates intel in MISP (unpublished, org-only)"}
+  - {match: "misp__*",             tier: auto}
+  - {match: "opencti__*",          tier: auto}
+
+  # --- network detection ----------------------------------------------------------
+  - {match: "archer__*",           tier: auto, note: "Archer findings, read-only (Viewer account; the connector only reads)"}
+
+  # --- hard denials (deny rules win wherever they sit, so misp__* etc. above cannot allow these) ---
+  - {match: "*__delete*", tier: deny}

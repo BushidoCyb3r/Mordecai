@@ -1,0 +1,213 @@
+"""Provider-neutral LLM interface.
+
+Internal conversation format is OpenAI chat-completions style dicts:
+  {"role": "system"|"user"|"assistant"|"tool", "content": str, "tool_calls": [...], "tool_call_id": str}
+Keys starting with "_" are backend-private (e.g. raw Anthropic content blocks that must be
+replayed verbatim) and are stripped by backends that don't understand them.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional, Protocol
+
+# Streaming sink: called with each new piece of visible assistant text as it is generated, or with None when the
+# provider restarted the response (a retry after a dropped stream) and the text so far must be discarded.
+DeltaFn = Callable[[Optional[str]], None]
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+    parse_error: str = ""
+
+
+@dataclass
+class LLMResponse:
+    text: str
+    tool_calls: list[ToolCall]
+    assistant_message: dict[str, Any]  # append this to history verbatim
+    stop_reason: str = ""
+    usage: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class ToolSpec:
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+
+class LLMBackend(Protocol):
+    profile_name: str
+    context_tokens: int
+
+    async def chat(self, messages: list[dict[str, Any]], tools: list[ToolSpec], on_delta: DeltaFn | None = None) -> LLMResponse:
+        """One model call. With on_delta, stream visible text through it while the response is generated."""
+        ...
+
+    async def aclose(self) -> None: ...
+
+
+# ---------------------------------------------------------------------------
+# Text-mode tool calling (for local models without native function calling).
+# Uses the Hermes-style <tool_call>{json}</tool_call> convention that most open
+# models are trained on.
+# ---------------------------------------------------------------------------
+_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
+
+
+class RepetitionLoop(Exception):
+    """The model got stuck repeating the same text (a degenerate loop); its reply was cut off."""
+
+    def __init__(self, unit: str, where: str = "text"):
+        super().__init__(f"model output keeps repeating {unit[:60]!r} ({where})")
+        self.unit = unit
+        self.where = where
+
+
+class LoopDetector:
+    """Spots degenerate repetition in model output: the tail of the text is one short span repeated over and
+    over ("2 low, 2 low, 2 low, ..."). Small local models fall into these loops and run to max_tokens.
+
+    A loop = the last `min_span`+ characters are `min_repeats`+ consecutive copies of one unit of at most
+    `max_period` characters. Ordinary prose, tables and lists of distinct values never qualify.
+    """
+
+    def __init__(self, min_span: int = 400, min_repeats: int = 5, max_period: int = 200, window: int = 4000,
+                 every: int = 48):
+        self.min_span, self.min_repeats, self.max_period = min_span, min_repeats, max_period
+        self.window, self.every = window, every
+        self.buf = ""
+        self.pending = 0
+
+    def feed(self, chunk: str) -> str | None:
+        """Add streamed text; returns the repeating unit once a loop is established, else None."""
+        self.buf = (self.buf + chunk)[-self.window:]
+        self.pending += len(chunk)
+        if self.pending < self.every:
+            return None
+        self.pending = 0
+        return self.check(self.buf)
+
+    def check(self, text: str) -> str | None:
+        t = text[-self.window:]
+        n = len(t)
+        for p in range(1, min(self.max_period, n // self.min_repeats) + 1):
+            reps = max(self.min_repeats, -(-self.min_span // p))
+            span = p * reps
+            if span > n or t[-1] != t[-1 - p]:  # cheap filter before comparing strings
+                continue
+            if t[-span + p:] == t[-span:-p]:  # the tail is p-periodic over the whole span
+                return t[-p:]
+        return None
+
+
+class ToolCallTextFilter:
+    """Forwards streamed text to a sink but holds back <tool_call> blocks, which are parsed out after the call.
+
+    Text after the first <tool_call> is not streamed; the final, cleaned text still arrives with the response.
+    """
+
+    TAG = "<tool_call>"
+
+    def __init__(self, sink: DeltaFn):
+        self.sink = sink
+        self.held = ""
+        self.blocked = False
+
+    def feed(self, chunk: str) -> None:
+        if self.blocked or not chunk:
+            return
+        self.held += chunk
+        i = self.held.find(self.TAG)
+        if i >= 0:
+            out, self.held, self.blocked = self.held[:i], "", True
+        else:  # keep a possible partial tag at the end until the next chunk decides it
+            keep = next((k for k in range(min(len(self.TAG) - 1, len(self.held)), 0, -1)
+                         if self.TAG.startswith(self.held[-k:])), 0)
+            out, self.held = self.held[:len(self.held) - keep], self.held[len(self.held) - keep:]
+        if out:
+            self.sink(out)
+
+    def flush(self) -> None:
+        """End of stream: a held partial tag turned out to be ordinary text."""
+        if self.held and not self.blocked:
+            self.sink(self.held)
+        self.held = ""
+
+    def reset(self) -> None:
+        self.held, self.blocked = "", False
+        self.sink(None)
+
+
+def text_tools_prompt(tools: list[ToolSpec]) -> str:
+    lines = [
+        "# Tools",
+        "You may call tools. To call one, output exactly:",
+        '<tool_call>{"name": "<tool name>", "arguments": {<json args>}}</tool_call>',
+        "You may emit several <tool_call> blocks in one reply. After calling tools, STOP and wait;",
+        "results arrive in <tool_response> blocks. Available tools (JSON schema):",
+    ]
+    for t in tools:
+        lines.append(json.dumps({"name": t.name, "description": t.description, "parameters": t.parameters}))
+    return "\n".join(lines)
+
+
+def parse_text_tool_calls(text: str) -> tuple[str, list[ToolCall]]:
+    calls: list[ToolCall] = []
+    for m in _TOOL_CALL_RE.finditer(text or ""):
+        cid = "call_" + uuid.uuid4().hex[:12]
+        try:
+            obj = json.loads(m.group(1))
+            calls.append(ToolCall(cid, str(obj.get("name", "")), obj.get("arguments") or {}))
+        except json.JSONDecodeError as e:
+            calls.append(ToolCall(cid, "invalid", {}, parse_error=f"invalid tool call JSON: {e}"))
+    clean = _TOOL_CALL_RE.sub("", text or "").strip()
+    return clean, calls
+
+
+# text mode's own tags inside a tool result, in any case or spacing ("</tool_response>", "< TOOL_CALL"): escaped
+_TEXT_TAGS = re.compile(r"<(?=\s*/?\s*(?:tool_response|tool_call)\b)", re.I)
+
+
+def to_text_mode(messages: list[dict[str, Any]], tools: list[ToolSpec]) -> list[dict[str, Any]]:
+    """Rewrite a native-tool conversation into plain user/assistant turns."""
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        role = m["role"]
+        if role == "system":
+            content = m["content"]
+            if not out:  # first system message gets the tool catalogue
+                content = content + "\n\n" + text_tools_prompt(tools)
+            out.append({"role": "system", "content": content})
+        elif role == "assistant":
+            content = m.get("content") or ""
+            for tc in m.get("tool_calls") or []:
+                fn = tc["function"]
+                content += f'\n<tool_call>{{"name": "{fn["name"]}", "arguments": {fn["arguments"]}}}</tool_call>'
+            out.append({"role": "assistant", "content": content.strip()})
+        elif role == "tool":
+            # the data cannot end its <tool_response> block early, or write a <tool_call> the model might copy
+            name = re.sub(r"[^A-Za-z0-9_.:-]", "_", str(m.get("name", "")))
+            block = f'<tool_response name="{name}">\n{_TEXT_TAGS.sub("&lt;", str(m["content"]))}\n</tool_response>'
+            if out and out[-1]["role"] == "user" and out[-1].get("_tool_resp"):
+                out[-1]["content"] += "\n" + block
+            else:
+                out.append({"role": "user", "content": block, "_tool_resp": True})
+        else:
+            out.append({"role": role, "content": m.get("content") or ""})
+    return [{k: v for k, v in m.items() if not k.startswith("_")} for m in out]
+
+
+def message_chars(m: dict[str, Any]) -> int:
+    return len(json.dumps(m, default=str))
+
+
+def estimate_tokens(messages: list[dict[str, Any]]) -> int:
+    return sum(map(message_chars, messages)) // 4

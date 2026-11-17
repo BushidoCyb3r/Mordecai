@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+config/.env
+# API client configs and other credentials (contain private keys)
+config/secrets/
+config/*.local.yaml
+*.api.yaml
+cases/
+memory/
+evidence/
+forensics/
+data/
+training.jsonl
+
+# private working list
+TODO.md
+run/
+
+# historical reports dropped in for the report writer (format examples; sensitive)
+reports/
+tool_specs/
+build/
+dist/
