@@ -10,7 +10,8 @@ Only a model is strictly required. Every connector is optional: enable the ones 
 use what is connected.
 
 For a Linux VM on a Windows workstation, start with [section 0a: VMware Workstation Pro](#0a-linux-vm-with-vmware-workstation-pro).
-That section also covers the equivalent network arrangement on macOS with VMware Fusion.
+That section also covers the equivalent network arrangement on macOS with VMware Fusion. To run it in WSL 2 on
+the Windows PC itself, start with [section 0b: Windows with WSL 2](#0b-windows-with-wsl-2).
 
 Run commands from the repository root. Use `.venv/bin/mordecai`, or activate the environment with
 `source .venv/bin/activate` before examples that use bare `mordecai`.
@@ -64,6 +65,8 @@ scripts/stop.sh             # stop
       reboot until stop removes it.
     - **No firewall enabled** (the default on Debian, Kali and Ubuntu): nothing to do; other devices can connect.
       Rules written by hand (nftables, iptables) need root to read, so start cannot tell: allow the port yourself.
+    - **WSL 2:** the Windows firewall decides what other devices reach, and start cannot change it from inside
+      Linux. Start prints a `WSL:` line saying where to open the dashboard instead of the SSH command (section 0b).
   - **Case:** an existing case, or a new case id.
 
   An option skips its question (`--posture respond`, `--host 0.0.0.0` or `--localhost`, `--case IR-0042`,
@@ -88,7 +91,8 @@ scripts/stop.sh             # stop
 ## 0. Before you start
 
 **What the harness host needs:**
-- Linux, with Python 3.11 or newer and its `venv` module (Debian/Ubuntu: `apt install python3-venv`).
+- Linux (on Windows: WSL 2, [section 0b](#0b-windows-with-wsl-2)), with Python 3.11 or newer and its `venv`
+  module (Debian/Ubuntu: `apt install python3-venv`).
 - `git` and `openssl`. The dashboard makes its own self-signed certificate with openssl when it serves beyond
   localhost.
 - `bwrap` (bubblewrap) to onboard new tools: `dnf install bubblewrap` or `apt install bubblewrap`. Without it,
@@ -481,6 +485,168 @@ credentials, permissions or compatibility with the backend's installed version.
 **Access from other workstations:** use the guest's same LAN address, `https://192.168.10.50:8765/`,
 and allow those workstation source IPs through the guest firewall. Use the current sign-in token and
 dashboard account. VMware port forwarding is not part of this bridged setup.
+
+---
+
+## 0b. Windows with WSL 2
+
+Run the harness in WSL 2 (Windows Subsystem for Linux) on the Windows PC itself, and use the dashboard in a
+Windows browser on that PC. WSL 2 runs a real Linux kernel, so everything works as on any Ubuntu host: the
+bubblewrap sandbox, the `noexec` vault and every connector. In the rest of this guide, **harness host** means
+the Ubuntu distribution. Choose a VM (section 0a) instead when other workstations must reach the dashboard
+from a Windows 10 PC, or when the evidence host must be kept apart from your Windows session.
+
+**What you need:**
+- Windows 10 version 2004 or later, or Windows 11. Windows 11 22H2 or later adds **mirrored networking**,
+  which works better with VPNs, with a model running on the PC, and with other devices reaching the dashboard.
+- **WSL 2**, not WSL 1, which lacks the Linux namespaces the sandbox needs.
+- **Ubuntu 24.04.** Its Python 3.12 meets the harness's 3.11 minimum; Ubuntu 22.04 ships 3.10.
+
+### Install WSL 2 and Ubuntu
+
+In PowerShell as administrator:
+
+```powershell
+wsl --install -d Ubuntu-24.04
+wsl -l -v            # the VERSION column must say 2
+```
+
+Restart Windows if asked, then open **Ubuntu 24.04** from the Start menu and create your Linux user. A
+distribution that shows VERSION 1 converts with `wsl --set-version Ubuntu-24.04 2`.
+
+### Settings for a host that handles evidence
+
+**Turn off interop.** By default, Linux programs in WSL can start Windows programs, with your Windows
+account's access and outside every protection the harness puts on the vault. Add these lines to
+`/etc/wsl.conf` in Ubuntu (`sudoedit /etc/wsl.conf`), keeping what is already in the file:
+
+```ini
+[interop]
+enabled=false
+appendWindowsPath=false
+```
+
+With interop off, Windows programs such as `explorer.exe` or VS Code's `code` command no longer start from
+this distribution. If you also use Ubuntu for other work, give Mordecai a distribution of its own. While interop
+is on, `install.sh` warns about it. For stricter separation, `[automount]` `enabled=false` also hides the
+Windows drives from Linux; you then copy evidence in from File Explorer (below).
+
+**Set WSL's networking and idle shutdown.** Create or edit `%UserProfile%\.wslconfig` in Windows (a plain text
+file):
+
+```ini
+[wsl2]
+# Windows 11 22H2 or later; leave this line out on Windows 10
+networkingMode=mirrored
+
+[general]
+# keep the distribution running while the dashboard runs in the background
+instanceIdleTimeout=-1
+```
+
+WSL shuts a distribution down after it has been idle for 15 seconds, and a dashboard running in the background
+with no Ubuntu window open may count as idle. Set `instanceIdleTimeout=-1` as above, or keep an Ubuntu window open
+while you use the dashboard. WSL gets half the PC's memory by default; for large memory images, plaso or a local
+model, raise it with `memory=` (e.g. `memory=24GB`) under `[wsl2]`.
+
+Apply both files: run `wsl --shutdown` in PowerShell, wait about 8 seconds, then open Ubuntu again.
+
+### Install the harness inside Ubuntu
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv git openssl ca-certificates bubblewrap curl
+cd ~
+git clone https://github.com/BushidoCyb3r/Mordecai.git mordecai
+cd mordecai
+./scripts/install.sh --harden-vault
+```
+
+- **Keep the checkout in your Linux home folder** (`~`), never under `/mnt/c` or another Windows drive. WSL does
+  not apply Linux file permissions on Windows drives: every file there is executable, evidence samples
+  included, and `config/.env` and the secrets are readable by every user. `install.sh` refuses such a checkout.
+- **`--harden-vault` works in WSL 2.** WSL mounts the `/etc/fstab` entries each time the distribution starts, so the
+  vault and `forensics/` stay `noexec`.
+- **The bubblewrap check should say `ok`.** If it says bwrap cannot create a sandbox, check that `wsl -l -v`
+  shows VERSION 2.
+
+Then continue with section 1 (model) and the connector sections; everything in them applies inside Ubuntu.
+
+**Evidence from Windows:** copy it into the case folder inside Linux, e.g.
+`cp /mnt/c/Users/<you>/Downloads/memory.raw ~/mordecai/forensics/IR-0042/`, or in File Explorer to
+`\\wsl.localhost\Ubuntu-24.04\home\<user>\mordecai\forensics\IR-0042\`. Do not work on evidence from a Windows
+drive, and do not open `evidence/vault/` or `forensics/` from Windows: Windows programs, antivirus included,
+see those files without their Linux protections and may quarantine or change samples. WSL's virtual disk
+(on `C:`) grows with what you copy in and does not give the space back by itself: plan room for large images.
+
+### Open the dashboard
+
+**On this PC** (simplest):
+
+```bash
+scripts/start.sh --localhost
+```
+
+Open the printed `http://127.0.0.1:8765/login?token=...` link in a Windows browser. WSL passes `127.0.0.1` through
+to Windows, so no certificate or firewall change is involved, and other devices cannot reach it. As on any
+host, other people signed in to the same PC can reach the port; they would still need the access token, username
+and password.
+
+With all interfaces (`0.0.0.0`, the default address choice), start makes the HTTPS certificate and prints a link
+for each address. In this PC's browser, use the `https://127.0.0.1:8765` link. Start prints a `WSL:` line saying
+so, in place of the SSH command it prints on other hosts.
+
+**From other devices** (Windows 11 22H2 or later, with mirrored networking set as above): WSL's Hyper-V
+firewall, not Linux's, decides what reaches the dashboard, and `--open-firewall` cannot change it from inside
+Linux. In PowerShell as administrator, allow the port from the workstations that need it only:
+
+```powershell
+New-NetFirewallHyperVRule -Name MordecaiDashboard -DisplayName "Mordecai dashboard" -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol TCP -LocalPorts 8765 -RemoteAddresses 192.168.10.30
+```
+
+The GUID is WSL's ID in the Hyper-V firewall (Microsoft's
+[WSL networking](https://learn.microsoft.com/en-us/windows/wsl/networking) page); adjust the port and the source
+addresses for your setup (`-RemoteAddresses` takes addresses, subnets or ranges). Then start with
+`scripts/start.sh --host 0.0.0.0` and open the printed link for the PC's LAN address on the other device. The rule
+stays until you remove it: `Remove-NetFirewallHyperVRule -Name MordecaiDashboard`. Always give `-Name`: without
+it, that command removes every Hyper-V firewall rule on the PC.
+
+On Windows 10, which has no mirrored networking, other devices reach WSL only through `netsh interface
+portproxy` to an address that changes at every restart. Use a VM (section 0a) instead.
+
+### Use a model running on this PC
+
+- **Mirrored networking:** a model server on Windows that listens on `127.0.0.1` is reachable from Ubuntu at the
+  same address, with no firewall rule: e.g. `OLLAMA_URL=http://127.0.0.1:11434/v1` for Ollama's default listener.
+- **NAT (Windows 10, or without `networkingMode=mirrored`):** Windows is at the address
+  `ip route show | grep -i default | awk '{print $3}'` prints in Ubuntu, and it can change when Windows restarts.
+  The model server must listen beyond `127.0.0.1` (for Ollama, `OLLAMA_HOST`), and the Windows firewall must allow
+  its port from WSL: use the narrowly scoped rule in section 0a, with WSL's address as the remote address.
+
+Check from Ubuntu before a model run: `curl --connect-timeout 5 --max-time 15 http://127.0.0.1:11434/v1/models`
+(substitute the URL you configured).
+
+### Connectors, VPN and DNS
+
+- **Every connector connects out from Ubuntu.** Backends see the PC's own LAN address in both networking modes,
+  so allow that address in Security Onion's `elasticsearch_rest` host group, MISP key IP restrictions and the
+  Velociraptor server firewall (`--harness-ip` in section 5).
+- **VPN:** with mirrored networking and DNS tunneling (on by default from Windows 11 22H2), WSL uses the Windows
+  VPN and its name resolution. In NAT mode, a VPN on Windows can break name resolution inside WSL.
+- **Run the checks in section 0a's "Verify DNS, VPN access and backend authentication" inside Ubuntu.**
+- **CA certificates installed in Windows are not visible to Python in WSL.** Copy CA bundles into `config/secrets/`
+  and use their Linux paths.
+
+| Symptom | Check next |
+|---|---|
+| `install.sh` says the checkout is on a Windows drive | Clone it into your Linux home (`cd ~`), not under `/mnt/c` |
+| `install.sh` says Python 3.11 or newer is required | Use Ubuntu 24.04 (`wsl --install -d Ubuntu-24.04`); 22.04 ships 3.10 |
+| bwrap cannot create a sandbox | `wsl -l -v` must show VERSION 2 |
+| The dashboard stops when you close the Ubuntu windows | `instanceIdleTimeout=-1` in `.wslconfig`, or keep a window open |
+| `http://127.0.0.1:8765` does not open in Windows | `ss -ltn \| grep 8765` in Ubuntu; in NAT mode, `localhostForwarding` must not be `false` in `.wslconfig` |
+| Other devices time out | Mirrored networking, the rule (`Get-NetFirewallHyperVRule -Name MordecaiDashboard`), and a start with `--host 0.0.0.0` |
+| Changes to `.wslconfig` or `/etc/wsl.conf` have no effect | `wsl --shutdown`, wait about 8 seconds, open Ubuntu again |
+| TLS or sign-in failures after the PC wakes from sleep | Compare `date` in Ubuntu with the Windows clock; `wsl --shutdown` resets it |
 
 ---
 

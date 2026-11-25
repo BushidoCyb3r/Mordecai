@@ -77,6 +77,17 @@ cd "$REPO"
 [ -f pyproject.toml ] && [ -d mordecai ] || die "run this from a Mordecai checkout (pyproject.toml not found in $REPO)"
 umask 077   # everything this script creates is private unless set otherwise below
 
+# WSL: a Windows drive (/mnt/c, ...) ignores Linux permissions - every file is executable, evidence samples included,
+# and the secrets are readable by every user - and its file locking is unreliable for SQLite. Refuse before building.
+if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+  fs=$(awk -v t="$REPO" '{mp=$5; gsub(/\\040/," ",mp); if ((t==mp || mp=="/" || index(t, mp"/")==1) && length(mp)>=bl) {bl=length(mp); for (i=7; i<NF && $i!="-"; i++); fs=$(i+1)}} END {print fs}' /proc/self/mountinfo)
+  case "$fs" in 9p|drvfs|virtiofs)
+    die "$REPO is on a Windows drive ($fs). WSL does not apply Linux file permissions there, so the vault and the
+       secrets would be unprotected. Clone it into your Linux home instead (SETUP.md section 0b):
+       cd ~ && git clone https://github.com/BushidoCyb3r/Mordecai.git mordecai" ;;
+  esac
+fi
+
 # ---------------------------------------------------------------------------------------------------------------
 step "1. Python"
 py_ok() { "$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; }
@@ -230,10 +241,15 @@ if command -v bwrap >/dev/null 2>&1; then
     ok "bwrap (bubblewrap): the sandbox for onboarded tools"
   else
     warn "bwrap is installed but cannot create a sandbox here (user namespaces disabled?) - tool onboarding will not work"
-    info "     check: sysctl user.max_user_namespaces (must be > 0); on Ubuntu 24.04+ also the AppArmor userns restriction"
+    info "     check: sysctl user.max_user_namespaces (must be > 0); on Ubuntu 24.04+ also the AppArmor userns restriction;"
+    info "     in WSL, the distribution must be WSL 2 (wsl -l -v in PowerShell)"
   fi
 else
   warn "bwrap (bubblewrap) not found: needed only to onboard new tools (dnf install bubblewrap | apt install bubblewrap)"
+fi
+if [ -e /proc/sys/fs/binfmt_misc/WSLInterop ] || [ -e /proc/sys/fs/binfmt_misc/WSLInterop-late ]; then
+  warn "WSL interop is on: programs here can start Windows programs, which the vault's Linux protections do not cover"
+  info "     on a host that handles hostile files, turn it off: [interop] enabled=false in /etc/wsl.conf (SETUP.md 0b)"
 fi
 
 # ---------------------------------------------------------------------------------------------------------------

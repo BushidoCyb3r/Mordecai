@@ -477,6 +477,24 @@ def tunnel_hint(host: str, port: int) -> str:
             "there")
 
 
+def wsl() -> bool:
+    """Running in WSL (Windows Subsystem for Linux): its kernel release names Microsoft."""
+    try:
+        return "microsoft" in Path("/proc/sys/kernel/osrelease").read_text().lower()
+    except OSError:
+        return False
+
+
+def wsl_hint(host: str, port: int) -> str:
+    """Where the dashboard opens in WSL, in place of the SSH tunnel: WSL passes 127.0.0.1 through to the Windows
+    browser in either networking mode, and the Windows firewall, not Linux, decides what other devices reach."""
+    if loopback(host):
+        return "open the sign-in link in this PC's Windows browser; other devices cannot reach this address"
+    where = f"the https://127.0.0.1:{port} link" if host == ALL else "the sign-in link"
+    return (f"in this PC's Windows browser, use {where}. Other devices need WSL's mirrored networking and a Hyper-V "
+            f"firewall rule for port {port} (SETUP.md section 0b)")
+
+
 # ---- TLS -------------------------------------------------------------------------------------------------
 def cert_names(host: str) -> list[str]:
     """The names a dashboard listening on `host` is reached by: every address of this host for 0.0.0.0, else that
@@ -771,7 +789,9 @@ def start(cfg: HarnessConfig, config_path: str, opts: dict[str, Any]) -> int:
         print(f"  Firewall:      {fw_status}")
     if fw_note:
         print(f"  note: {fw_note}")
-    if s["host"] == LOCAL or fw_note:  # other devices cannot connect directly: the way in that needs no change
+    if wsl():
+        print(f"  WSL: {wsl_hint(s['host'], s['port'])}")
+    elif s["host"] == LOCAL or fw_note:  # other devices cannot connect directly: the way in that needs no change
         print(f"  From another device through SSH (no firewall change): {tunnel_hint(s['host'], s['port'])}")
     for name, v in conn.items():
         if not str(v).startswith("connected"):

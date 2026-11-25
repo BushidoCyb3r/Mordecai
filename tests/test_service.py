@@ -190,12 +190,14 @@ def test_start_stop_keeps_data_and_renews_token(tmp_path, monkeypatch, capsys):
     cfg = load_config(p)
     port = free_port()
     opts = {"host": "127.0.0.1", "port": port, "case": "SVC-1"}
+    monkeypatch.setattr(service, "wsl", lambda: True)  # in WSL, start points at the Windows browser, not an SSH tunnel
     try:
         assert service.start(cfg, str(p), opts) == 0
         first = json.loads((service.run_dir(cfg) / "dashboard.json").read_text())
         assert stat.S_IMODE((service.run_dir(cfg) / "dashboard.json").stat().st_mode) == 0o600
         out = capsys.readouterr().out
         assert f"Access token:  {first['token']}" in out and "username and password" in out
+        assert "WSL: open the sign-in link in this PC's Windows browser" in out and "ssh -L" not in out
         log = (service.run_dir(cfg) / "dashboard.log").read_text()
         assert "open: http" in log and first["token"] not in log  # the background log never holds the token
         assert signin(first["url"], first["token"]) == 200
@@ -448,6 +450,30 @@ def test_firewall_note_and_ssh_tunnel_hint(tmp_path, monkeypatch):
     local = service.tunnel_hint("127.0.0.1", 8765)
     assert "ssh -L 8765:127.0.0.1:8765 " in local and "the sign-in link above" in local
     assert "https://127.0.0.1:8765/login" in service.tunnel_hint("0.0.0.0", 8765)
+
+
+def test_wsl_hint_points_at_the_windows_browser():
+    local, everywhere = service.wsl_hint("127.0.0.1", 8765), service.wsl_hint("0.0.0.0", 8765)
+    assert "Windows browser" in local and "cannot reach" in local and "ssh" not in local
+    assert "https://127.0.0.1:8765 link" in everywhere and "Hyper-V" in everywhere and "section 0b" in everywhere
+    assert "use the sign-in link" in service.wsl_hint("192.0.2.10", 8765)
+
+
+def test_installer_finds_a_windows_drive_in_wsl(tmp_path):
+    """install.sh refuses a checkout on a Windows drive in WSL: the mount holding it (longest prefix) is 9p/virtiofs."""
+    import re
+    import subprocess
+
+    prog = re.search(r"fs=\$\(awk -v t=\"\$REPO\" '(.+?)' /proc/self/mountinfo\)",
+                     (ROOT / "scripts" / "install.sh").read_text()).group(1)
+    mi = tmp_path / "mountinfo"
+    mi.write_text("62 47 8:48 / / rw,relatime - ext4 /dev/sdc rw\n"
+                  "80 62 0:63 / /mnt/c rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\\;uid=1000\n"
+                  "81 62 0:64 / /mnt/my\\040share rw,noatime shared:5 - virtiofs drvfsa rw\n")
+    def fstype(path: str) -> str:
+        return subprocess.run(["awk", "-v", f"t={path}", prog, str(mi)], capture_output=True, text=True).stdout.strip()
+    assert fstype("/home/analyst1/mordecai") == "ext4" and fstype("/mnt/cx/mordecai") == "ext4"
+    assert fstype("/mnt/c/Users/analyst1/mordecai") == "9p" and fstype("/mnt/my share/mordecai") == "virtiofs"
 
 
 def test_start_opens_the_port_while_it_runs_and_stop_closes_it(tmp_path, monkeypatch):

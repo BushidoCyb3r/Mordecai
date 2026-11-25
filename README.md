@@ -43,6 +43,8 @@ and the expert team **writes, scores and revises its own skills** as it works.
 
 - **Linux:** RHEL-family (RHEL, Rocky, Alma), Debian/Ubuntu or Kali. The tool-onboarding sandbox uses Linux
   namespaces.
+- **On Windows:** WSL 2 with Ubuntu 24.04 ([SETUP.md section 0b](SETUP.md#0b-windows-with-wsl-2)), or a Linux VM
+  ([section 0a](SETUP.md#0a-linux-vm-with-vmware-workstation-pro)).
 - **Python 3.11 or newer** with `venv` (Debian/Ubuntu: `apt install python3-venv`).
 - **git**, and **openssl** (the dashboard makes its own TLS certificate when it serves beyond localhost).
 - **bubblewrap** (`bwrap`) for onboarding new tools (`dnf install bubblewrap` / `apt install bubblewrap`).
