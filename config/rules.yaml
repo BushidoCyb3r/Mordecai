@@ -15,6 +15,8 @@
 # installed flare-capa version, so the rules match the capa that reads them.
 # format: zip | tar.gz | file (default: from the url). strip: drop this top-level folder of the archive (glob).
 # dest: where it goes, under data/. default: the answer Enter gives in the installer.
+# timeout: seconds the whole download may take (default 1800). A download with no byte for 60 s fails sooner. On a
+# slow link raise it in config/rules.local.yaml, e.g.  sets: {volatility-windows: {timeout: 7200}}
 # Site changes (a mirror, a set of your own, enabled: false) go in config/rules.local.yaml, same shape, merged by name.
 sets:
   attack:
@@ -23,7 +25,7 @@ sets:
     format: file
     dest: attack/enterprise-attack.json
     check: attack
-    size: about 45 MB
+    size: about 55 MB
     license: MITRE ATT&CK terms of use
     default: true
   yara:
@@ -41,7 +43,8 @@ sets:
     license: Detection Rule License 1.1
     default: true
   capa:
-    what: capa rules matching the installed capa (pip flare-capa; the standalone capa binary has its own) - local_capa
+    what: capa rules matching the installed capa (pip flare-capa; the standalone capa binary has its own) - local_capa.
+      Needs capa installed first (scripts/install.sh --forensics); without it the set is passed over
     url: https://github.com/mandiant/capa-rules/archive/refs/tags/v{capa}.zip
     strip: "*"
     dest: rules/capa
@@ -53,7 +56,9 @@ sets:
     url: https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip
     strip: windows
     dest: rules/volatility-symbols/windows
-    size: large (hundreds of MB)
+    timeout: 7200
+    size: 801 MB download (about 1.6 GB free disk while it installs); the pack is dated 2019, so it lacks Windows
+      builds released since - online, Volatility fetches those symbols from Microsoft instead
     license: Volatility Foundation symbol packs
     default: false
   volatility-linux:
@@ -61,7 +66,7 @@ sets:
     url: https://downloads.volatilityfoundation.org/volatility3/symbols/linux.zip
     strip: linux
     dest: rules/volatility-symbols/linux
-    size: large (hundreds of MB)
+    size: about 3 MB (dated 2024)
     license: Volatility Foundation symbol packs
     default: false
   volatility-mac:
@@ -69,7 +74,7 @@ sets:
     url: https://downloads.volatilityfoundation.org/volatility3/symbols/mac.zip
     strip: mac
     dest: rules/volatility-symbols/mac
-    size: large (hundreds of MB)
+    size: about 81 MB (dated 2020)
     license: Volatility Foundation symbol packs
     default: false
   nuclei-templates:

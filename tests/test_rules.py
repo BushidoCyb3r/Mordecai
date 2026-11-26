@@ -4,6 +4,7 @@ there, carried to an air-gapped host as a bundle. No test touches the network: s
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import sys
 import zipfile
@@ -130,3 +131,94 @@ def test_volatility_reads_local_symbols_and_never_goes_online(tmp_path, monkeypa
     out = asyncio.run(f.volatility(str(tmp_path / "evidence/mem.raw"), "windows.pslist"))
     args = out.split("\n", 1)[1].split()
     assert "--offline" in args and args[args.index("-s") + 1] == str(tmp_path / "symbols")
+
+
+# Slow, stalled and interrupted downloads: each ends that set with a reason, never a silent wait
+
+class _Body(httpx.SyncByteStream):
+    """A response body that sends `first`, then calls `then` (which stalls, trickles or raises)."""
+
+    def __init__(self, first: bytes, then):
+        self.first, self.then = first, then
+
+    def __iter__(self):
+        yield self.first
+        yield from self.then()
+
+
+def _serve(body_then, length=10_000_000):
+    def handler(request):
+        return httpx.Response(200, headers={"content-length": str(length)}, stream=_Body(b"x" * 1000, body_then))
+    return httpx.MockTransport(handler)
+
+
+def test_a_stalled_download_fails_that_set_and_setup_goes_on(tmp_path):
+    def stall():
+        raise httpx.ReadTimeout("no data for 60 s")
+        yield b""  # unreachable: makes this a generator
+    data, zips = tmp_path / "data", make_zip(tmp_path / "ok.zip", {"ok.txt": "ok"})
+    sets = {"stuck": {"url": "https://rules.example/stuck.zip", "dest": "rules/stuck", "default": True},
+            "local": {"url": str(zips), "dest": "rules/local", "default": True}}
+    said: list[str] = []
+    assert rulesets.setup(data, sets, lambda q: "", said.append, _serve(stall)) == 1
+    assert any(s.startswith("  FAIL  stuck: ReadTimeout") for s in said)
+    assert rulesets.installed(data, sets["local"]) and not rulesets.installed(data, sets["stuck"])
+    assert not list(data.glob(".fetch-*"))  # nothing half-written is left behind
+
+
+def test_a_trickle_is_cut_off_at_the_sets_timeout(tmp_path):
+    import time
+
+    def trickle():
+        while True:  # a byte now and then: each read succeeds, so only the overall limit can end it
+            time.sleep(0.05)
+            yield b"x"
+    spec = {"url": "https://rules.example/slow.zip", "dest": "rules/slow", "timeout": 0.5}
+    t = time.monotonic()
+    with pytest.raises(rulesets.TooSlow, match="not done after 0 s.*rules.local.yaml"):
+        rulesets.fetch(tmp_path / "data", "slow", spec, _serve(trickle), out=io.StringIO())
+    assert time.monotonic() - t < 5
+    assert not rulesets.installed(tmp_path / "data", spec)
+
+
+def test_ctrl_c_during_a_download_skips_that_set_only(tmp_path):
+    def interrupted():
+        raise KeyboardInterrupt
+        yield b""  # unreachable: makes this a generator
+    data, zips = tmp_path / "data", make_zip(tmp_path / "ok.zip", {"ok.txt": "ok"})
+    sets = {"big": {"url": "https://rules.example/big.zip", "dest": "rules/big", "default": True},
+            "local": {"url": str(zips), "dest": "rules/local", "default": True}}
+    said: list[str] = []
+    assert rulesets.setup(data, sets, lambda q: "", said.append, _serve(interrupted)) == 1
+    assert any("skip  big: stopped (Ctrl-C)" in s for s in said)
+    assert rulesets.installed(data, sets["local"]) and not list(data.glob(".fetch-*"))
+
+
+def test_ctrl_c_at_a_question_ends_the_questions(tmp_path):
+    def ask(q):
+        raise KeyboardInterrupt
+    said: list[str] = []
+    sets = {"a": {"url": "unused", "dest": "rules/a", "default": True}}
+    assert rulesets.setup(tmp_path / "data", sets, ask, said.append) == 0
+    assert any("no more sets asked about" in s for s in said)
+
+
+def test_capa_rules_are_passed_over_without_capa(tmp_path, monkeypatch):
+    from importlib import metadata
+
+    def no_capa(name):
+        raise metadata.PackageNotFoundError(name)
+    monkeypatch.setattr(metadata, "version", no_capa)
+    spec = rulesets.sources(ROOT / "config")["capa"]
+    assert "install it first" in rulesets.unavailable(spec)
+    said: list[str] = []
+    assert rulesets.setup(tmp_path / "data", {"capa": spec}, lambda q: pytest.fail("asked about capa"), said.append) == 0
+    assert said and said[0].startswith("  skip  capa: needs the installed capa")
+
+
+def test_progress_is_shown_and_ends_its_line(tmp_path):
+    out = io.StringIO()
+    data = make_zip(tmp_path / "x.zip", {"a.txt": "a"})
+    rulesets.fetch(tmp_path / "data", "x", {"url": str(data), "dest": "rules/x"}, out=out)
+    text = out.getvalue()
+    assert "x: 0 of 0 MiB" in text and "x: extracting" in text  # not a terminal: plain lines, one per step

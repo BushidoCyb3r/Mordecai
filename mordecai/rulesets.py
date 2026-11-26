@@ -5,6 +5,9 @@ where each comes from and where it goes under data/. Each is fetched once - by s
 each, or `mordecai rules` - from its source, an internal mirror or a local path. An air-gapped host gets them from a
 bundle made on a connected host (`mordecai rules bundle`, then `mordecai rules import` here). data/rules.lock.json
 records what is installed: where it came from, the SHA-256 of what was downloaded, and when.
+
+A download shows its progress, fails when no byte has come for STALL seconds, and fails when it takes longer than the
+set's `timeout` (seconds, config/rules.yaml): a slow or stalled link ends with a message, never a silent wait.
 """
 
 from __future__ import annotations
@@ -15,12 +18,14 @@ import json
 import os
 import shutil
 import stat
+import sys
 import tarfile
 import tempfile
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any, Callable, TextIO
 
 import httpx
 
@@ -28,6 +33,54 @@ from .config import load_yaml
 from .toolspecs import sha256_file
 
 LOCK = "rules.lock.json"
+STALL = 60            # seconds without a byte before a download fails
+TIMEOUT = 1800        # a set's whole download, unless its spec sets `timeout`
+CHUNK = 1 << 20
+
+
+class TooSlow(OSError):
+    """A download that went past its time limit. It fails that set only."""
+
+
+class Progress:
+    """One line per download: MiB received of the total, and the rate. Redrawn in place on a terminal, a line about
+    every 10% otherwise (a log or a pipe)."""
+
+    def __init__(self, label: str, out: TextIO | None = None) -> None:
+        self.label, self.out = label, out if out is not None else sys.stderr
+        self.tty = bool(getattr(self.out, "isatty", lambda: False)())
+        self.start = self.last = time.monotonic()
+        self.step = -1
+        self.shown = False
+
+    def update(self, done: int, total: int | None) -> None:
+        now = time.monotonic()
+        if self.tty:
+            if now - self.last < 0.5:
+                return
+        else:
+            step = done * 10 // total if total else int(now - self.start) // 30
+            if step == self.step:
+                return
+            self.step = step
+        self.last = now
+        rate = done / max(now - self.start, 1e-6) / 1048576
+        size = f"{done / 1048576:.0f} of {total / 1048576:.0f} MiB" if total else f"{done / 1048576:.0f} MiB"
+        line = f"    {self.label}: {size}, {rate:.1f} MiB/s"
+        self.out.write(f"\r{line:<70}" if self.tty else line + "\n")
+        self.out.flush()
+        self.shown = True
+
+    def note(self, text: str) -> None:
+        self.end()
+        self.out.write(f"    {self.label}: {text}\n")
+        self.out.flush()
+
+    def end(self) -> None:
+        if self.tty and self.shown:
+            self.out.write("\n")
+            self.out.flush()
+        self.shown = False
 
 
 def sources(config_dir: Path) -> dict[str, dict[str, Any]]:
@@ -72,6 +125,15 @@ def installed(data: Path, spec: dict[str, Any]) -> bool:
     return d.is_file() or (d.is_dir() and any(d.iterdir()))
 
 
+def unavailable(spec: dict[str, Any]) -> str:
+    """Why a set cannot be fetched on this host yet (capa rules without capa installed), or ""."""
+    try:
+        _url(spec)
+    except ValueError as e:
+        return str(e)
+    return ""
+
+
 def _url(spec: dict[str, Any]) -> str:
     url = str(spec["url"])
     if "{capa}" in url:
@@ -84,17 +146,39 @@ def _url(spec: dict[str, Any]) -> str:
     return url
 
 
-def _download(url: str, to: Path, transport: Any = None) -> None:
-    """From the network (http/https), or a copy of a local path or file:// URL (a mounted share, a mirror on disk)."""
+def _download(url: str, to: Path, transport: Any = None, limit: float = TIMEOUT,
+              progress: Progress | None = None) -> None:
+    """From the network (http/https), or a copy of a local path or file:// URL (a mounted share, a mirror on disk).
+    Fails after STALL seconds without a byte, or after `limit` seconds in all."""
+    deadline = time.monotonic() + limit
+
+    def check(done: int, total: int | None) -> None:
+        if progress:
+            progress.update(done, total)
+        if time.monotonic() > deadline:
+            got = f"{done / 1048576:.0f}" + (f" of {total / 1048576:.0f}" if total else "")
+            raise TooSlow(f"{url}: not done after {limit:.0f} s ({got} MiB came). A slow link: raise `timeout` for "
+                          f"this set in config/rules.local.yaml, use a mirror, or bring it in a bundle")
+
     if url.startswith(("http://", "https://")):
-        with httpx.Client(follow_redirects=True, timeout=httpx.Timeout(60, read=300), transport=transport) as c:
+        with httpx.Client(follow_redirects=True, timeout=httpx.Timeout(STALL, connect=30), transport=transport) as c:
             with c.stream("GET", url) as r:
                 r.raise_for_status()
+                total = int(r.headers["content-length"]) if r.headers.get("content-length", "").isdigit() else None
+                done = 0
                 with open(to, "wb") as fh:
-                    for chunk in r.iter_bytes(1 << 20):
+                    for chunk in r.iter_bytes():  # as it arrives: a fixed size would wait for it
                         fh.write(chunk)
+                        done += len(chunk)
+                        check(done, total)
     else:
-        shutil.copyfile(Path(os.path.expanduser(url.removeprefix("file://"))), to)
+        src = Path(os.path.expanduser(url.removeprefix("file://")))
+        total, done = src.stat().st_size, 0
+        with open(src, "rb") as i, open(to, "wb") as o:
+            while chunk := i.read(CHUNK):
+                o.write(chunk)
+                done += len(chunk)
+                check(done, total)
 
 
 def _member(name: str, strip: str) -> PurePosixPath | None:
@@ -166,16 +250,23 @@ def _place(dest: Path, built: Path) -> None:
     _remove(old)
 
 
-def fetch(data: Path, name: str, spec: dict[str, Any], transport: Any = None) -> dict[str, Any]:
-    """Download (or copy) one set and install it under data/. Returns its lock entry."""
+def fetch(data: Path, name: str, spec: dict[str, Any], transport: Any = None,
+          out: TextIO | None = None) -> dict[str, Any]:
+    """Download (or copy) one set and install it under data/, showing progress on `out` (default stderr).
+    Returns its lock entry."""
     url = _url(spec)
+    limit = float(spec.get("timeout") or TIMEOUT)
+    progress = Progress(name, out)
     dest = _dest(data, spec["dest"])
     fmt = spec.get("format") or ("zip" if url.endswith(".zip") else "tar.gz" if url.endswith((".tar.gz", ".tgz"))
                                   else "file")
     data.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=data, prefix=".fetch-") as tmp:
         got = Path(tmp) / "download"
-        _download(url, got, transport)
+        try:
+            _download(url, got, transport, limit, progress)
+        finally:
+            progress.end()
         sha = sha256_file(got)
         if fmt == "file":
             if spec.get("check") == "attack":
@@ -183,6 +274,7 @@ def fetch(data: Path, name: str, spec: dict[str, Any], transport: Any = None) ->
             built = got
         else:
             built = Path(tmp) / "set"
+            progress.note("extracting")
             if not _extract(got, fmt, built, str(spec.get("strip") or "")):
                 raise ValueError(f"{url}: no files in the archive")
         _place(dest, built)
@@ -236,32 +328,43 @@ def import_bundle(data: Path, path: Path, sha256: str = "") -> list[str]:
 
 
 def setup(data: Path, sets: dict[str, dict[str, Any]], ask: Callable[[str], str] = input,
-          say: Callable[[str], None] = print, transport: Any = None) -> int:
+          say: Callable[[str], None] = print, transport: Any = None, out: TextIO | None = None) -> int:
     """The installer's decision gates: for each set not installed yet, ask whether to fetch it now (Enter takes the
-    set's default). A source that cannot be reached ends the questions with how to bring the sets in by hand.
-    Returns how many sets failed."""
+    set's default). A set this host cannot fetch yet is passed over with the reason, and not asked about. Ctrl-C
+    during a download skips that set; at a question it ends the questions. A source that cannot be reached ends the
+    questions with how to bring the sets in by hand. Returns how many sets failed."""
     failed = 0
     for name, spec in sets.items():
         if installed(data, spec):
             say(f"  ok    {name}: {_dest(data, spec['dest'])}")
             continue
+        if why := unavailable(spec):
+            say(f"  skip  {name}: {why}")
+            continue
         default = bool(spec.get("default"))
         q = (f"  Download {name}: {spec.get('what', '')} ({spec.get('size', 'size unknown')}; "
              f"{spec.get('license', 'license: see the source')})? [{'Y/n' if default else 'y/N'}] ")
-        a = ask(q).strip().lower()
+        try:
+            a = ask(q).strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            say("\n  stopped: no more sets asked about (later: mordecai rules setup)")
+            return failed
         if not (a.startswith("y") or (not a and default)):
             say(f"  skip  {name} (later: mordecai rules fetch {name})")
             continue
         try:
-            fetch(data, name, spec, transport)
+            fetch(data, name, spec, transport, out)
             say(f"  ok    {name}: {_dest(data, spec['dest'])}")
-        except httpx.TransportError as e:  # no route to the source: the other sets will not come either
+        except KeyboardInterrupt:
+            failed += 1
+            say(f"\n  skip  {name}: stopped (Ctrl-C); nothing was changed. Later: mordecai rules fetch {name}")
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ProxyError) as e:  # no route to the source
             say(f"  FAIL  {name}: cannot reach {spec.get('url')}: {type(e).__name__}: {e}")
             say("  No internet here? Make a bundle on a connected host (mordecai rules fetch, then mordecai rules "
                 "bundle FILE) and run scripts/install.sh --rules-from FILE here, or point url at a local mirror in "
                 "config/rules.local.yaml.")
             return failed + 1
-        except (ValueError, OSError, httpx.HTTPStatusError) as e:  # this set only: a bad url, a missing file, a 404
+        except (ValueError, OSError, httpx.HTTPError) as e:  # this set only: a stall, too slow, a 404, a bad archive
             failed += 1
             say(f"  FAIL  {name}: {type(e).__name__}: {e}")
     return failed

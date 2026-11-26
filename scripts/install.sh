@@ -280,6 +280,7 @@ elif [ -n "$RULES" ]; then
   .venv/bin/mordecai rules fetch ${RULES//,/ } || warn "some sets did not come (see above) - no internet here? use --rules-from"
 elif [ -t 0 ]; then
   info "Enter takes the default shown. Air-gapped? Answer n, then use --rules-from with a bundle (config/rules.yaml)."
+  info "Ctrl-C during a download skips that set; a stalled or too-slow download fails on its own and says why."
   .venv/bin/mordecai rules setup || warn "some sets did not come - re-run later: .venv/bin/mordecai rules setup"
 else
   info "no terminal to ask in: nothing fetched. Use --rules all|none|LIST or --rules-from FILE, or later:"

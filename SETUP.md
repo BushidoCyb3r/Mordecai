@@ -139,6 +139,10 @@ What the script does:
    into `data/` once. The tools read them there; nothing is downloaded while the harness runs. It asks only in a
    terminal; without one it fetches nothing and says how (`mordecai rules setup` later). `--rules all|none|LIST`
    answers without asking; `--rules-from FILE` imports a bundle instead (below); `--attack` adds ATT&CK to `--rules`.
+   Each download shows MiB received and the rate. One that gets no data for 60 s, or runs past its set's `timeout`
+   (30 minutes; 2 hours for the 801 MB Windows symbol pack), fails with the reason and the installer goes on; on a
+   slow link raise `timeout` in `config/rules.local.yaml`. Ctrl-C during a download skips that set only. The capa
+   rules need capa installed (`--forensics`); without it the set is passed over, not failed.
 7. **Doctor:** it runs `doctor` last. `--test` also installs pytest and runs the test suite first.
 
 **Air-gapped networks.** The harness needs nothing from the internet while it runs: the model is yours (a local

@@ -654,10 +654,16 @@ def cmd_rules(args) -> int:
                                                                                   if names else ""))
         failed = 0
         for n in names:
-            print(f"fetching {n} from {sets[n].get('url')}")
+            if args.all and (why := rulesets.unavailable(sets[n])):  # named on its own, it fails below with the reason
+                print(f"  skip {n}: {why}")
+                continue
+            print(f"fetching {n} from {sets[n].get('url')} ({sets[n].get('size', 'size unknown')})")
             try:
                 e = rulesets.fetch(data, n, sets[n])
                 print(f"  ok {n}: data/{e['dest']} (sha256 {e['sha256']})")
+            except KeyboardInterrupt:  # Ctrl-C skips the set being fetched and goes on with the next
+                failed += 1
+                print(f"\n  skipped {n}: stopped (Ctrl-C); nothing was changed", file=sys.stderr)
             except (ValueError, OSError, rulesets.httpx.HTTPError) as e:
                 failed += 1
                 print(f"  FAILED {n}: {type(e).__name__}: {e}", file=sys.stderr)
