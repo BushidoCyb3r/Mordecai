@@ -1,9 +1,12 @@
-"""Live checks of the MISP connector against your MISP: one call of every read tool, plus the account check.
+"""Live checks of the MISP connector against your MISP: one call of every read tool, plus the account check, and
+optionally the two writes.
 
 Skipped unless MORDECAI_LIVE_MISP=1. The MISP_* settings come from config/.env (or the environment):
     MORDECAI_LIVE_MISP=1 .venv/bin/python -m pytest -q tests/test_misp_live.py
     MORDECAI_LIVE_MISP_FEED_VALUE=<a value in one of your cached feeds> also checks the feed-cache search.
-Read-only: nothing here adds a sighting or creates an event.
+Read-only by default. MORDECAI_LIVE_MISP_WRITE=1 also checks the writes on a throwaway event: one unpublished,
+organization-only event holding a single made-up .invalid domain, a sighting and a false-positive sighting of that
+value only, then the event is deleted (its sightings go with it).
 """
 
 from __future__ import annotations
@@ -80,3 +83,31 @@ def test_4_events_attributes_and_event_detail(m):
     assert d["id"] == ev[0]["id"] and "galaxies" in d and len(d["attributes"]) <= 5
     a = json.loads(m.search_attributes(since="3650d", to_ids_only=False, limit=3))
     assert a["count"] >= 1 and a["attributes"][0]["value"]
+
+
+@pytest.mark.skipif(os.environ.get("MORDECAI_LIVE_MISP_WRITE") != "1", reason="set MORDECAI_LIVE_MISP_WRITE=1 to check the writes")
+def test_5_writes_on_a_throwaway_event(m):
+    """create_event stores what it promises (unpublished, organization only, the tag and threat level given), and
+    add_sighting records both types with source Mordecai, on a made-up value no real intelligence holds."""
+    import uuid
+
+    value = f"mordecai-live-test-{uuid.uuid4().hex[:8]}.invalid"
+    tags = [t["name"] for t in (m._req("GET", "/tags/index/searchall:tlp:clear").get("Tag") or [])][:1]  # if it exists
+    made = json.loads(m.create_event(info=f"Mordecai live test - safe to delete ({value})", threat_level="low",
+                                     attributes=[{"type": "domain", "value": value, "comment": "made-up test value"}],
+                                     tags=tags))
+    try:
+        assert made["published"] is False and str(made["distribution"]) == "0"
+        ev = m._req("GET", f"/events/view/{made['id']}")["Event"]
+        assert ev["published"] is False and str(ev["distribution"]) == "0" and str(ev["threat_level_id"]) == "3"
+        assert [a["value"] for a in ev["Attribute"]] == [value] and str(ev["Attribute"][0]["distribution"]) == "5"
+        assert [t["name"] for t in ev.get("Tag", [])] == tags
+        m.add_sighting(value)
+        m.add_sighting(value, sighting_type="false_positive")
+        r = m._req("POST", "/sightings/restSearch", {"returnFormat": "json", "value": value})
+        got = sorted((str(x["Sighting"]["type"]), x["Sighting"]["source"], str(x["Sighting"]["event_id"])) for x in r["response"])
+        assert got == [("0", "Mordecai", str(made["id"])), ("1", "Mordecai", str(made["id"]))]
+        assert value in m.get_event(str(made["id"])) and json.loads(m.search_ioc([value]))[value]["hits"] == 1
+    finally:
+        m._req("POST", f"/events/delete/{made['id']}")
+        assert not m._req("POST", "/sightings/restSearch", {"returnFormat": "json", "value": value})["response"]

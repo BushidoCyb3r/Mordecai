@@ -761,11 +761,12 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md): privately, through Gi
 
 - **Live-verified:** Velociraptor (except quarantine, which was deliberately not run on the dev
   workstation), Security Onion 3.4.0 and Elastic (read-only API key; including the Sigma back-test, detection
-  coverage and alert techniques), MISP 2.5.37 (the read tools; `tests/test_misp_live.py`), sigma-cli and capa.
+  coverage and alert techniques), MISP 2.5.37 (the read tools, and the two writes on a throwaway event:
+  `tests/test_misp_live.py`, with `MORDECAI_LIVE_MISP_WRITE=1` for the writes), sigma-cli and capa.
 - **Untested beyond its safety check:** Splunk. Only the SPL command check (read-only commands, allowed macros)
   has tests; search and response handling have never run against Splunk or a mock of it.
-- **Tested against mock servers or stand-in tools only:** MISP's two writes (sighting, event) and OpenCTI (mock HTTP servers built from
-  their documented APIs and the official pycti queries), Archer (a stand-in HTTPS server built from its API
+- **Tested against mock servers or stand-in tools only:** OpenCTI (a mock HTTP server built from its documented API
+  and the official pycti queries), Archer (a stand-in HTTPS server built from its API
   contract; `tests/test_archer_live.py` runs the acceptance checks against yours), Elastic Security detection alerts, plus the
   Zimmerman tools, FLOSS, MemProcFS and ALEAPP/iLEAPP stand-ins. Validate against your instances.
 - SOC-native Security Onion features (cases, PCAP jobs, OQL, managing detections) need SO Pro's Connect API /

@@ -1293,9 +1293,14 @@ Restart the dashboard (`scripts/stop.sh`, `scripts/start.sh`) so it starts the c
 MORDECAI_LIVE_MISP=1 MORDECAI_LIVE_MISP_FEED_VALUE=<a value you know is in one of your cached feeds> \
   .venv/bin/python -m pytest -q -rs tests/test_misp_live.py
 ```
-They should pass with no skips. A skip that says the key has admin rights means step 2 used the wrong role. A
-feed-cache failure usually means step 4 was missed for that feed. Warninglist matches are context for review,
-not proof that an indicator is benign.
+They should pass, with only the write check skipped. A skip that says the key has admin rights means step 2 used the
+wrong role. A feed-cache failure usually means step 4 was missed for that feed. Warninglist matches are context for
+review, not proof that an indicator is benign.
+
+**Optional write check.** Add `MORDECAI_LIVE_MISP_WRITE=1` to the command above to check the two writes too. It
+creates one unpublished, organization-only event holding a single made-up `.invalid` domain, adds a sighting and a
+false-positive sighting of that value only, reads everything back, then deletes the event (its sightings go with it).
+It changes no real intelligence, but the event's creation and deletion appear in MISP's own audit log.
 
 ---
 
