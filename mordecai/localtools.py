@@ -68,7 +68,8 @@ def report(cfg: Any, say: Callable[[str], None] = print) -> int:
     lk = rulesets.lock(rulesets.data_dir(cfg))
     rows = status(cfg)
     for name, found, how in rows:
-        fetched = f" (fetched {lk[name].get('version') or lk[name].get('fetched', '')})" if found and name in lk else ""
+        mine = found and name in cat["sets"] and name in lk  # the lock also holds rule sets (capa, sigma): not programs
+        fetched = f" (fetched {lk[name].get('version') or lk[name].get('fetched', '')})" if mine else ""
         say(f"  {'ok' if found else 'MISSING':8s} {name:15s} {found + fetched if found else how}")
     pkgs = [cat["packages"][n][pm] for n, found, _ in rows if not found and pm and (cat["packages"].get(n) or {}).get(pm)]
     if pkgs:

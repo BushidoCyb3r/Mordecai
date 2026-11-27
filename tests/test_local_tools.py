@@ -42,6 +42,7 @@ def test_shipped_downloads_are_optional_pinned_and_cover_the_ez_wrapper():
             shas = item["sha256"] if isinstance(item["sha256"], dict) else {"": item["sha256"]}
             assert set(urls) == set(shas) and all(u.startswith("https://") for u in urls.values()), name
             assert all(re.fullmatch(r"[0-9a-f]{64}", h) for h in shas.values()), name
+    assert set(sets).isdisjoint(rulesets.sources(ROOT / "config"))  # one lock file holds both: names must not clash
     ez = {Path(f["url"]).stem for f in sets["ez-tools"]["files"]}
     assert ez == set(Forensics.EZ_TOOLS)  # one pinned download for every parser the wrapper runs
 
@@ -156,8 +157,11 @@ def test_status_says_how_to_get_each_missing_program(tmp_path, monkeypatch, pm, 
     assert rows["yara"][1].startswith(f"{pm} install yara") and rows["capa"][1].startswith("scripts/install.sh --forensics")
     assert rows["hayabusa"][1] == "optional download, if your organization allows it: mordecai local-tools fetch hayabusa"
     assert rows["ez-tools"][0] == "" and "fetch ez-tools" in rows["ez-tools"][1] and "ALEAPP_PATH" in rows["aleapp"][1]
+    (tmp_path / "data").mkdir()  # a rule set named like a program is not a fetched program
+    (tmp_path / "data" / rulesets.LOCK).write_text(json.dumps({"file": {"dest": "rules/x", "fetched": "2026-01-01"}}))
     out: list[str] = []
     assert localtools.report(cfg, out.append) == len(rows) - 1
+    assert next(line for line in out if " file " in line).rstrip().endswith("/usr/bin/file")
     install = next(line for line in out if f"sudo {pm} install " in line).split(f"sudo {pm} install ")[1].split()
     assert "yara" in install and "binutils" in install and len(install) == len(set(install))
     assert "never fetched for you" in out[-1]
