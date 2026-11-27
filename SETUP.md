@@ -1395,7 +1395,10 @@ workstation**, which is usually monitored.
 configured: YARA rules (`local_yara_scan`), Sigma rules (chainsaw in `local_evtx_hunt`), capa rules matching the
 installed capa (`local_capa`), and Volatility 3 symbol packs (`local_volatility`, which also runs with `--offline`
 when the installed Volatility has it, 2.4 or newer, so it does not look for symbols on the internet; an older
-Volatility may still try). `local_evtx_hunt` uses hayabusa, with its own rules, when it is installed; chainsaw
+Volatility may still try). The Windows symbol pack is dated 2019: memory from a Windows build released since needs
+its symbol table added by hand. Make it on a connected host with Volatility's PDB converter
+(`volatility3/framework/symbols/windows/pdbconv.py`) and copy it into `data/rules/volatility-symbols/windows/`,
+keeping the pack's folder layout. `local_evtx_hunt` uses hayabusa, with its own rules, when it is installed; chainsaw
 also needs its Sigma mapping file: set `forensics.binaries.chainsaw_mapping: /path/to/sigma-event-logs-all.yml`. `mordecai rules status` shows what is installed, `mordecai rules
 setup` asks about what is missing, and `doctor` lists both. To update a set, fetch it again (or import a newer
 bundle); it is replaced whole. Your own rule folders win when you set them:

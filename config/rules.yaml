@@ -58,7 +58,7 @@ sets:
     dest: rules/volatility-symbols/windows
     timeout: 7200
     size: 801 MB download (about 1.6 GB free disk while it installs); the pack is dated 2019, so it lacks Windows
-      builds released since - online, Volatility fetches those symbols from Microsoft instead
+      builds released since, and the harness runs Volatility offline - add those builds' symbols yourself (SETUP.md section 8)
     license: Volatility Foundation symbol packs
     default: false
   volatility-linux:
