@@ -20,6 +20,7 @@ from pathlib import Path
 
 from mcp import Client, StdioServerParameters, stdio_client
 
+from .servers.common import tls_context
 from .tools.registry import Tool, ToolRegistry
 
 log = logging.getLogger("mordecai.mcp")
@@ -54,7 +55,7 @@ class McpManager:
             import httpx2
             from mcp.client.streamable_http import streamable_http_client
 
-            http = httpx2.AsyncClient(headers=spec.get("headers") or {}, verify=spec.get("ca_bundle") or spec.get("verify_tls", True),
+            http = httpx2.AsyncClient(headers=spec.get("headers") or {}, verify=tls_context(spec.get("ca_bundle") or spec.get("verify_tls", True)),
                                       timeout=spec.get("timeout_s", 120))
             return streamable_http_client(spec["url"], http_client=http)
         env = {k: str(v) for k, v in (spec.get("env") or {}).items()}

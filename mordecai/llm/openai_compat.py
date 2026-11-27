@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 
 from ..config import ModelProfile
+from ..servers.common import tls_context
 from .base import DeltaFn, LLMResponse, ToolCall, ToolCallTextFilter, ToolSpec, parse_text_tool_calls, to_text_mode
 
 _RETRY_ERRORS = (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError, httpx.ReadError)
@@ -42,13 +43,11 @@ class OpenAICompatBackend:
                 headers["Authorization"] = f"Bearer {profile.api_key}"
             else:
                 headers[profile.api_key_header] = profile.api_key
-        verify: Any = profile.ca_bundle or profile.verify_tls
         cert = (profile.client_cert, profile.client_key) if profile.client_cert else None
         self.client = httpx.AsyncClient(
             base_url=profile.base_url.rstrip("/"),
             headers=headers,
-            verify=verify,
-            cert=cert,
+            verify=tls_context(profile.ca_bundle or profile.verify_tls, cert),
             timeout=httpx.Timeout(profile.timeout_s, connect=30.0),
         )
         self.stream_ok = profile.stream

@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from . import saferx
+from .servers.common import tls_context
 from .tools.forensics import PathJail, _kill_group
 from .tools.registry import Tool, schema
 
@@ -689,8 +690,7 @@ async def call_api(spec: dict[str, Any], op: dict[str, Any], args: dict[str, Any
             headers[str(auth["header"])] = secret
         else:
             basic = (os.environ.get(str(auth.get("env_user", "")), ""), secret)
-    verify: Any = spec.get("tls_verify", True)
-    async with httpx.AsyncClient(verify=verify, timeout=float(spec.get("timeout_s", 60)), follow_redirects=False,
+    async with httpx.AsyncClient(verify=tls_context(spec.get("tls_verify", True)), timeout=float(spec.get("timeout_s", 60)), follow_redirects=False,
                                  transport=transport, trust_env=False) as client:
         r = await client.request(method, url, params=query or None, json=body, headers=headers, auth=basic)
     text = r.text[:int(spec.get("max_response_chars", 60000))]

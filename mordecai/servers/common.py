@@ -6,6 +6,7 @@ import functools
 import json
 import os
 import re
+import ssl
 import sys
 from typing import Any, Callable
 
@@ -54,6 +55,23 @@ def tls_verify(value: str) -> Any:
     if value.lower() in ("0", "false", "no"):
         return False
     return value
+
+
+def tls_context(verify: bool | str, cert: str | tuple[str, str] | None = None) -> bool | ssl.SSLContext:
+    """`verify` as httpx and httpx2 now take it. True or False stay as they are, so each library keeps its own default
+    trust store. A CA bundle path (a file or a folder) or a client certificate becomes the ssl.SSLContext those
+    libraries used to build from them (passing them directly is deprecated). A client certificate is kept alongside a CA
+    path: httpx silently dropped it there, and httpx2 refuses the pair."""
+    if isinstance(verify, str):
+        ctx = ssl.create_default_context(capath=verify) if os.path.isdir(verify) else ssl.create_default_context(cafile=verify)
+    elif cert:
+        ctx = httpx.create_ssl_context(verify=verify)  # httpx's own default trust store (or none, for False)
+    else:
+        return verify
+    if cert:
+        certfile, keyfile = (cert, None) if isinstance(cert, str) else (cert[0], cert[1] or None)
+        ctx.load_cert_chain(certfile, keyfile)
+    return ctx
 
 
 def dumps(obj: Any, limit: int = 60000) -> str:
@@ -105,7 +123,7 @@ class ESClient:
         if not re.fullmatch(r"[1-9][0-9]{0,5}(ms|s|m)", self.search_timeout):
             raise ValueError(f"{prefix}_SEARCH_TIMEOUT: a duration such as 60s, 90000ms or 2m")
         self.http = httpx.Client(base_url=url.rstrip("/"), headers=headers, auth=auth,
-                                 verify=tls_verify(env(f"{prefix}_VERIFY", "true")), timeout=float(env(f"{prefix}_TIMEOUT", "120")))
+                                 verify=tls_context(tls_verify(env(f"{prefix}_VERIFY", "true"))), timeout=float(env(f"{prefix}_TIMEOUT", "120")))
 
     def req(self, method: str, path: str, body: Any = None, params: dict[str, Any] | None = None) -> Any:
         search = method == "POST" and path.endswith("/_search") and isinstance(body, dict)

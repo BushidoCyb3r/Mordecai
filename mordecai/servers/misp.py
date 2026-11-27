@@ -20,7 +20,7 @@ import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
-from .common import ACTION, READ, dumps, env, tls_verify, tool_factory
+from .common import ACTION, READ, dumps, env, tls_context, tls_verify, tool_factory
 
 mcp = MCPServer("misp", instructions="MISP threat intel: IOC lookups, events, warninglists (known-benign), sightings.")
 tool = tool_factory(mcp)
@@ -28,7 +28,7 @@ CHANGE = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_worl
 http = httpx.Client(base_url=env("MISP_URL", required=True).rstrip("/"),
                     headers={"Authorization": env("MISP_KEY", required=True), "Accept": "application/json",
                              "Content-Type": "application/json"},
-                    verify=tls_verify(env("MISP_VERIFY", "true")), timeout=float(env("MISP_TIMEOUT", "120")))
+                    verify=tls_context(tls_verify(env("MISP_VERIFY", "true"))), timeout=float(env("MISP_TIMEOUT", "120")))
 MAX = int(env("MISP_MAX_RESULTS", "100"))
 STALE_DAYS = float(env("MISP_FEED_STALE_DAYS", "7"))
 THREAT = {"high": 1, "medium": 2, "low": 3, "undefined": 4}

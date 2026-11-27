@@ -532,3 +532,40 @@ def test_yara_folder_scans_do_not_follow_symlinks(tmp_path, monkeypatch):
     f.bin["yara"] = "no-such-yara"  # no binary: the yara-python path
     asyncio.run(f.yara_scan(str(ev / "triage")))
     assert seen == [str(ev / "triage" / "a.bin")]
+
+
+def test_tls_settings_reach_httpx_without_deprecated_arguments(tmp_path):
+    """A CA bundle path and a client certificate become an ssl.SSLContext (httpx and httpx2 deprecate passing them);
+    True and False pass through, so each library keeps its own default trust store."""
+    import shutil
+    import ssl
+    import warnings
+
+    import httpx
+    import httpx2
+
+    from mordecai.config import ModelProfile
+    from mordecai.llm.openai_compat import OpenAICompatBackend
+    from mordecai.servers.common import tls_context
+    from mordecai.service import ensure_cert
+
+    if not shutil.which("openssl"):
+        pytest.skip("openssl is needed to make a test certificate")
+    cert, key = tmp_path / "c.pem", tmp_path / "k.pem"
+    ensure_cert(cert, key, "127.0.0.1")
+    assert tls_context(True) is True and tls_context(False) is False
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any deprecation from httpx or httpx2 fails the test
+        ca = tls_context(str(cert))
+        assert isinstance(ca, ssl.SSLContext) and ca.verify_mode == ssl.CERT_REQUIRED and ca.check_hostname
+        assert ca.cert_store_stats()["x509"] == 1  # exactly the bundle given
+        assert isinstance(tls_context(str(tmp_path)), ssl.SSLContext)  # a folder of CA files
+        for verify in (str(cert), True, False):  # a client certificate with each, a CA path included (httpx dropped it)
+            assert isinstance(tls_context(verify, (str(cert), str(key))), ssl.SSLContext)
+        httpx.Client(verify=ca).close()
+        httpx2.Client(verify=ca).close()
+        b = OpenAICompatBackend(ModelProfile(name="t", provider="openai_compat", model="m", base_url="https://gw.test/v1",
+                                             ca_bundle=str(cert), client_cert=str(cert), client_key=str(key)))
+        asyncio.run(b.aclose())
+    with pytest.raises((OSError, ssl.SSLError)):  # a client key that is not there fails loudly, never silently
+        tls_context(True, (str(cert), str(tmp_path / "missing.key")))

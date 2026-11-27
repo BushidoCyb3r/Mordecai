@@ -13,14 +13,14 @@ from typing import Any
 import httpx
 from mcp.server.mcpserver import MCPServer
 
-from .common import READ, dumps, env, tls_verify, tool_factory
+from .common import READ, dumps, env, tls_context, tls_verify, tool_factory
 
 mcp = MCPServer("opencti", instructions="OpenCTI threat intel: observables, indicators, actors/malware/campaigns, relationships.")
 tool = tool_factory(mcp)
 http = httpx.Client(base_url=env("OPENCTI_URL", required=True).rstrip("/"),
                     headers={"Authorization": f"Bearer {env('OPENCTI_TOKEN', required=True)}",
                              "Content-Type": "application/json"},
-                    verify=tls_verify(env("OPENCTI_VERIFY", "true")), timeout=float(env("OPENCTI_TIMEOUT", "120")))
+                    verify=tls_context(tls_verify(env("OPENCTI_VERIFY", "true"))), timeout=float(env("OPENCTI_TIMEOUT", "120")))
 SDO_TYPES = ["Intrusion-Set", "Threat-Actor-Group", "Threat-Actor-Individual", "Malware", "Campaign", "Attack-Pattern",
              "Tool", "Vulnerability", "Report", "Infrastructure"]
 

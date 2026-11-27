@@ -18,7 +18,7 @@ import re
 import httpx
 from mcp.server.mcpserver import MCPServer
 
-from .common import tool_factory, READ, dumps, env, tls_verify
+from .common import READ, dumps, env, tls_context, tls_verify, tool_factory
 
 mcp = MCPServer("splunk", instructions="Read-only Splunk searches for security operations (SPL).")
 tool = tool_factory(mcp)
@@ -30,7 +30,7 @@ if env("SPLUNK_TOKEN"):
 else:
     _auth = (env("SPLUNK_USER", required=True), env("SPLUNK_PASS"))
 http = httpx.Client(base_url=env("SPLUNK_URL", required=True).rstrip("/"), headers=_headers, auth=_auth,
-                    verify=tls_verify(env("SPLUNK_VERIFY", "true")), timeout=float(env("SPLUNK_TIMEOUT", "300")))
+                    verify=tls_context(tls_verify(env("SPLUNK_VERIFY", "true"))), timeout=float(env("SPLUNK_TIMEOUT", "300")))
 MAX = int(env("SPLUNK_MAX_RESULTS", "200"))
 
 _BLOCKED = ("delete", "collect", "mcollect", "meventcollect", "tscollect", "outputlookup", "outputcsv", "outputtext",
