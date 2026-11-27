@@ -58,7 +58,8 @@ and the expert team **writes, scores and revises its own skills** as it works.
   (`--rules-from FILE`) on an air-gapped one. The harness downloads nothing while it runs: Volatility (2.4+) runs
   `--offline` and MemProcFS without Microsoft's symbol server. Scanners that update themselves need their own
   offline options, e.g. nuclei `-duc` (SETUP.md, *Air-gapped networks*).
-- Optional: the connectors you have, local forensic tools (SETUP.md section 8), and Chrome or Chromium for the
+- Optional: the connectors you have, local forensic tools (SETUP.md section 8; `mordecai local-tools status` says how
+  to get each missing one), and Chrome or Chromium for the
   browser-driven accessibility tests.
 
 ## Quick start
@@ -82,6 +83,7 @@ and folders (`config/.env`, `config/secrets/`, `config/*.local.yaml`, `cases/`, 
 $EDITOR config/.env                                              # models + connector credentials (SETUP.md)
 # evidence for a case goes in forensics/<case-id>/ (created per case; the forensics playbook starts there)
 .venv/bin/mordecai rules status                                # rules + reference data on this host (install.sh asks)
+.venv/bin/mordecai local-tools status                          # local programs: what is missing and how to get it
 .venv/bin/mordecai doctor    --case TEST                       # models, connectors, policy tier per tool
 scripts/start.sh --case IR-2026-0042                            # web GUI -> open the printed sign-in link
 .venv/bin/mordecai chat      --case IR-2026-0042               # terminal console
@@ -387,6 +389,10 @@ and a Velociraptor `investigator,api` client.
   scan of a folder does not follow symlinks inside it (an extracted archive keeps the host's links): YARA 4.2 or newer
   skips them, and with an older YARA a folder with a link that leads outside the evidence is refused.
 - `local_tools_inventory` shows what is installed. Missing tools fail gracefully.
+- `mordecai local-tools status` lists every program the wrappers use and how to get each missing one (the `dnf`/`apt`
+  package, `install.sh --forensics`, or a note). hayabusa, chainsaw and the EZ tools are optional downloads pinned to a
+  version and SHA-256, fetched only when you ask (`mordecai local-tools fetch NAME`), never by the installer: your
+  organization may not have approved them (SETUP.md section 8).
 
 ## Vulnerability assessment (every action approved)
 

@@ -130,8 +130,9 @@ What the script does:
 5. **Checks:** confirms all of these are git-ignored, reports:
    - the vault's mount;
    - the system tools the harness uses (`openssl`, `bwrap`);
-   - which local forensic tools are present (system binaries are not installed; `--forensics` installs
-     the optional Python packages).
+   - which local forensic tools the harness can use, and how to get each missing one (`mordecai local-tools
+     status`). It installs none of them: `--forensics` installs the optional Python packages, and the optional
+     third-party downloads (hayabusa, chainsaw, EZ tools) come only when you ask for one (section 8).
    - `--harden-vault` bind-mounts the vault and the forensics folder `noexec,nosuid,nodev` and adds them to
      `/etc/fstab` (with `nofail`) so this survives a reboot (sudo; it asks first unless `-y`).
 6. **Rules and reference data:** it asks about each set in `config/rules.yaml` that is not in `data/` yet (MITRE
@@ -1390,6 +1391,39 @@ this does not change the original files' permissions or sandbox every external p
 **Install what you need**, and **ask your security team before downloading tools onto an operator
 workstation**, which is usually monitored.
 
+**See what is missing:** `.venv/bin/mordecai local-tools status` lists every program the wrappers use, where the
+harness finds it, and how to get each missing one: the `dnf` or `apt` package on this host (with one install command
+for all of them), `scripts/install.sh --forensics` for the Python ones (Volatility 3, capa, FLOSS, sigma-cli, installed
+into `.venv`, which the harness searches after the system `PATH`), or a note. The installer runs it and `doctor` sums
+it up. It installs nothing: the command it prints is yours to run.
+
+**Optional downloads, never automatic.** hayabusa, chainsaw and Eric Zimmerman's command-line parsers (the 14 that
+`local_ez_tool` runs) are third-party programs your organization may not have approved, so nothing fetches them
+unless you ask, one at a time:
+```bash
+.venv/bin/mordecai local-tools fetch hayabusa     # or chainsaw, ez-tools
+.venv/bin/mordecai local-tools setup              # or be asked about each one (Enter means no)
+```
+- **Pinned.** `config/local-tools.yaml` pins each download to a version and SHA-256 (hayabusa 4.5.0, chainsaw 2.18.0,
+  the EZ tools as published on 2026-11-27). A file that differs is refused and nothing is installed. A set's program
+  must be a Linux program for this machine (x86-64 or ARM64), and it is the only file made executable.
+- **Used where nothing else is named.** They land in `data/tools/`, and the harness uses them where
+  `config/harness.yaml` names nothing else: `forensics.binaries.hayabusa` and `.chainsaw` (with chainsaw's Sigma mapping
+  file as `chainsaw_mapping`) and `forensics.ez_tools_dir`. A path you set there wins.
+- **Updating.** Check the new release, then set its `version` and `sha256` in `config/local-tools.local.yaml` and fetch
+  again. The EZ tools' download links are not versioned, so their pins fail whenever the author updates a tool:
+  `fetch ez-tools` then stops with "not the pinned" until the pin is updated.
+- **The EZ tools need the .NET 10 runtime** (`dotnet-runtime-10.0`; the status check prints the command). They parse
+  files collected from Windows; options that need a live Windows system, such as volume shadow copies, do not apply,
+  and the GUI tools (Timeline Explorer, Registry Explorer) are not part of the set.
+- **Air-gapped hosts:** `mordecai local-tools bundle FILE` on a connected host, then `mordecai local-tools import FILE
+  --sha256 <hex>` here. Each program is checked again on import.
+- **hayabusa 4 and older both work:** the wrapper asks hayabusa once which timeline command it has (`dfir-timeline`
+  from 4.0, `csv-timeline` before).
+- **ALEAPP and iLEAPP are not downloaded:** their Linux releases are AppImage, .deb and .rpm packages, not the
+  `aleapp.py` / `ileapp.py` scripts the wrapper runs. Use a source checkout (`ALEAPP_PATH`, `ILEAPP_PATH`,
+  `LEAPP_PYTHON` below).
+
 **Rules and symbols** come from `config/rules.yaml`: the installer fetches the sets you choose once into
 `data/rules/` (or imports a bundle on an air-gapped host), and the tools use them from there with nothing
 configured: YARA rules (`local_yara_scan`), Sigma rules (chainsaw in `local_evtx_hunt`), capa rules matching the
@@ -1407,20 +1441,20 @@ YARA_RULES=/opt/rules/yara              # default: data/rules/yara when fetched
 SIGMA_RULES=/opt/rules/sigma            # default: data/rules/sigma
 CAPA_RULES=/opt/rules/capa-rules        # default: data/rules/capa
 VOL_SYMBOLS=/opt/volatility3/symbols    # default: data/rules/volatility-symbols
-EZ_TOOLS_DIR=/opt/zimmermantools        # needs `dotnet` on Linux
+EZ_TOOLS_DIR=/opt/zimmermantools        # default: data/tools/ez when fetched; needs `dotnet` (.NET 10)
 MEMPROCFS_PYTHON=                       # python with `pip install memprocfs`
 ALEAPP_PATH=/opt/ALEAPP/aleapp.py
 ILEAPP_PATH=/opt/iLEAPP/ileapp.py
 LEAPP_PYTHON=
 ```
 Other binaries (`vol`, `log2timeline.py`, `tshark`, `zeek`, `capa`, `floss`, `exiftool`, etc.) are found on
-`PATH`. Dedicated wrappers support name/path overrides under `forensics.binaries` in `config/harness.yaml`.
+`PATH`, then in `.venv/bin`. Dedicated wrappers support name/path overrides under `forensics.binaries` in `config/harness.yaml`.
 `local_run` instead resolves the exact requested name on `PATH`, requires it in `forensics.allowed_binaries`
 (exiftool is refused even when listed: use `local_exiftool`), and invokes it without a shell. It does not use those binary overrides; review arguments that load plugins,
 scripts or write outputs before approving a call.
 
-**Check:** ask the team to run `local_tools_inventory` (`mordecai chat`, then "which local tools are
-installed?"). `doctor` lists the tools and their tiers.
+**Check:** `.venv/bin/mordecai local-tools status`, or ask the team to run `local_tools_inventory` (`mordecai chat`,
+then "which local tools are installed?"). `doctor` sums up the programs and lists the tools and their tiers.
 
 ---
 

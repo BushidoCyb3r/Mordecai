@@ -133,6 +133,7 @@ class Forensics:
         self.capa_rules = cfg.get("capa_rules_dir", "")
         self.vol_symbols = cfg.get("volatility_symbols_dir", "")
         self._vol_offline: bool | None = None  # does this Volatility have --offline (2.4+)? asked once
+        self._hb_dfir: bool | None = None  # does this hayabusa have dfir-timeline (4.0+)? asked once
         self.ez_dir = cfg.get("ez_tools_dir", "")
         self.mpfs_python = cfg.get("memprocfs_python") or sys.executable
         self.aleapp = cfg.get("aleapp_path", "")
@@ -348,9 +349,12 @@ class Forensics:
         p = self.jail.check(evtx_path)
         out = self._outdir("evtx_hunt")
         if shutil.which(self.bin["hayabusa"]):
-            csv = out / "hayabusa.csv"
-            res = await self._run([self._which("hayabusa"), "csv-timeline", "-d" if p.is_dir() else "-f", str(p),
-                                   "-o", str(csv), "-m", min_level, "-w", "-q", "-U"], timeout=3600)
+            csv, exe = out / "hayabusa.csv", self._which("hayabusa")
+            if self._hb_dfir is None:  # hayabusa 4 renamed csv-timeline to dfir-timeline and dropped -q: asked once
+                self._hb_dfir = "dfir-timeline" in await self._run([exe, "help"], timeout=120)
+            cmd, quiet = ("dfir-timeline", []) if self._hb_dfir else ("csv-timeline", ["-q"])
+            res = await self._run([exe, cmd, "-d" if p.is_dir() else "-f", str(p),
+                                   "-o", str(csv), "-m", min_level, "-w", *quiet, "-U"], timeout=3600)
             head = csv.read_text()[:12000] if csv.exists() else res
             return f"[hayabusa timeline saved {csv}]\n{head}"
         if shutil.which(self.bin["chainsaw"]):

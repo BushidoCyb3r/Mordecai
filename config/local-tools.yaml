@@ -1,0 +1,85 @@
+# Local programs the forensic tools use, and where each one comes from. Mordecai installs none of them by itself.
+#
+# `mordecai local-tools status` (also run by scripts/install.sh and summed up by `doctor`) lists which programs the
+# harness can use and, for each missing one, how to get it:
+#   packages  from the operating system's package manager, which checks what it installs; you install these yourself.
+#   python    installed into .venv by scripts/install.sh --forensics.
+#   sets      OPTIONAL third-party downloads, never fetched unless you ask for one: `mordecai local-tools fetch NAME`,
+#             or `mordecai local-tools setup`, which asks about each (default no). Your organization may not have
+#             approved these programs: check before you fetch one. Each download is pinned to a version and SHA-256 and
+#             refused when it differs; `bin` must be a Linux program for this machine. They land in data/tools/ and the
+#             harness uses them where config/harness.yaml names nothing else.
+# Site changes (a mirror, a newer pin, enabled: false) go in config/local-tools.local.yaml, same shape, merged by name.
+# To update a pin: check the new release, then set its version and sha256 there (or here, for everyone).
+
+packages:   # key: the name in forensics.binaries (or a program local_run may start); dnf/apt: the package to install
+  file: {dnf: file, apt: file}
+  strings: {dnf: binutils, apt: binutils}
+  yara: {dnf: yara, apt: yara, note: "RHEL family: from EPEL"}
+  tshark: {dnf: wireshark-cli, apt: tshark}
+  exiftool: {dnf: perl-Image-ExifTool, apt: libimage-exiftool-perl, note: "RHEL family: from EPEL"}
+  fls: {dnf: sleuthkit, apt: sleuthkit, note: "The Sleuth Kit; RHEL family: from EPEL"}
+  bulk_extractor: {apt: bulk-extractor, note: "RHEL family: not packaged; build it from github.com/simsong/bulk_extractor"}
+  zeek: {note: "not in most distributions' repositories: use the Zeek project's packages (docs.zeek.org)"}
+  log2timeline: {note: "plaso: in its own Python environment (pip install plaso) or from the GIFT repository (plaso.readthedocs.io)"}
+  psort: {note: "comes with plaso (log2timeline)"}
+  dotnet: {dnf: dotnet-runtime-10.0, apt: dotnet-runtime-10.0, note: "for the EZ tools; if your release lacks .NET 10: learn.microsoft.com/dotnet/core/install/linux"}
+  aleapp: {setting: aleapp_path, note: "a checkout of github.com/abrignoni/ALEAPP: set ALEAPP_PATH to its aleapp.py and LEAPP_PYTHON to a Python with its requirements"}
+  ileapp: {setting: ileapp_path, note: "a checkout of github.com/abrignoni/iLEAPP: set ILEAPP_PATH to its ileapp.py and LEAPP_PYTHON to a Python with its requirements"}
+
+python: [volatility, capa, floss, sigma]   # scripts/install.sh --forensics installs these into .venv
+
+sets:
+  hayabusa:
+    what: Hayabusa - Windows event log (EVTX) timelines with its own Sigma-based rules - local_evtx_hunt
+    version: 4.5.0
+    url:
+      x86_64: https://github.com/Yamato-Security/hayabusa/releases/download/v{version}/hayabusa-{version}-lin-x64-gnu.zip
+      aarch64: https://github.com/Yamato-Security/hayabusa/releases/download/v{version}/hayabusa-{version}-lin-aarch64-gnu.zip
+    sha256:
+      x86_64: 2921fc3c9d9a0150f07f7b0ed8a570c20dfc5e46a0d19f661550d8fc8bb77902
+      aarch64: 9a4933bfd9a0b8e5b10863bb6141938415b305f0c5e19d8fbb1d8061bb96f728
+    dest: tools/hayabusa
+    bin: hayabusa-{version}-lin-*-gnu   # its rules/ and config/ folders stay next to it, where it looks for them
+    size: about 18 MB
+    license: AGPL-3.0 (its rules - Detection Rule License 1.1)
+    default: false
+  chainsaw:
+    what: Chainsaw - Windows event log (EVTX) hunting with the Sigma rules in data/rules/sigma - local_evtx_hunt
+    version: 2.18.0
+    url:
+      x86_64: https://github.com/WithSecureOpenSource/chainsaw/releases/download/v{version}/chainsaw_x86_64-unknown-linux-gnu.tar.gz
+      aarch64: https://github.com/WithSecureOpenSource/chainsaw/releases/download/v{version}/chainsaw_aarch64-unknown-linux-gnu.tar.gz
+    sha256:
+      x86_64: 66dcbe261fac77d342f51a97a33f718e6bb485232c29248e590d88f2db0718e6
+      aarch64: 3ef99e8665fef505277e5a385b9ccab1bca56a4e7f392f60874d57b861a2a25b
+    strip: chainsaw
+    dest: tools/chainsaw
+    bin: chainsaw            # with mappings/sigma-event-logs-all.yml, used as forensics.binaries.chainsaw_mapping
+    size: about 4 MB
+    license: GPL-3.0
+    default: false
+  ez-tools:
+    what: Eric Zimmerman's command-line parsers (MFTECmd, EvtxECmd, RECmd, PECmd and 10 more; .NET builds run with
+      dotnet) - local_ez_tool. Needs the .NET 10 runtime (see packages). Their links are not versioned, so a pin fails
+      whenever the author updates a tool (check the new file, then update its sha256)
+    setting: ez_tools_dir
+    files:   # pinned 2026-11-27
+      - {url: https://download.ericzimmermanstools.com/net/MFTECmd.zip, sha256: 71449ed16c9c5c048a64f77f53535056fdfa660077be34b1305cce0c58a278c7}
+      - {url: https://download.ericzimmermanstools.com/net/EvtxECmd.zip, sha256: 3a631f5466b5e9d8c4a75c1f967dd9429fd7b4e935bc6c3bdef3ba58b0fc9d20}
+      - {url: https://download.ericzimmermanstools.com/net/RECmd.zip, sha256: 415d9aa9256d57ac5fa227e4e36f9f71fc674f7fbfadc5ce42c896bbd9c2d631}
+      - {url: https://download.ericzimmermanstools.com/net/PECmd.zip, sha256: d5a7c0bfb45c854076829bbb11ad73eb68cf977328ffad64b833aeacdcec50ea}
+      - {url: https://download.ericzimmermanstools.com/net/LECmd.zip, sha256: 629efb8851444e1f027cf50fb4267adb58152d0ca0cef34f35d2a14fa078df92}
+      - {url: https://download.ericzimmermanstools.com/net/JLECmd.zip, sha256: cb36bda2bb2a254b2b886c4a31dfa481fec20ae41a68a5744a9522dedaef54cd}
+      - {url: https://download.ericzimmermanstools.com/net/SBECmd.zip, sha256: b673a601601bb2d39579b104eccaa777b32e7c45f6d4f08aaf76137789b60df2}
+      - {url: https://download.ericzimmermanstools.com/net/AmcacheParser.zip, sha256: 4ef9cbc349f86d9e7931bf009d9095f9fc369b00acdc87b5b8df32133fd79c8f}
+      - {url: https://download.ericzimmermanstools.com/net/AppCompatCacheParser.zip, sha256: edd05745d3cb42d628a90ed6c04e2cfdf60df4fbf4ed749c07e6dc7039e647e1}
+      - {url: https://download.ericzimmermanstools.com/net/SrumECmd.zip, sha256: 6ff9bbd99b29933eb37e06b6a74edd7f68cf4a8df49656d4c62792daed808d02}
+      - {url: https://download.ericzimmermanstools.com/net/SQLECmd.zip, sha256: 5268c883fdc98aefb461792607893280f17960ca6d07d6c229fb52f5f2534b1a}
+      - {url: https://download.ericzimmermanstools.com/net/RBCmd.zip, sha256: 556acae3b192bddc4b320245112d3fa1c06492e6e9b23d1391b80347bf26bac5}
+      - {url: https://download.ericzimmermanstools.com/net/WxTCmd.zip, sha256: 99084980339677b2dd393ea818c1d1eaf62cc8490fd423406e187fab2df5d124}
+      - {url: https://download.ericzimmermanstools.com/net/bstrings.zip, sha256: 001ef4030a223e74a6927459084079050f978baa1a97199c288047b93d225c77}
+    dest: tools/ez
+    size: about 45 MB
+    license: MIT
+    default: false

@@ -218,6 +218,11 @@ def _print_status(h) -> None:
     missing = [n for n in sets if n not in have]
     print(f"  rules (on this host, nothing fetched at run time): {', '.join(have) or 'none'}"
           + (f" {C['y']}- missing: {', '.join(missing)} (mordecai rules setup){C['x']}" if missing else ""))
+    from . import localtools
+    rows = localtools.status(h.cfg)
+    lost = [n for n, found, _ in rows if not found]
+    print(f"  local programs: {len(rows) - len(lost)} of {len(rows)} found"
+          + (f" {C['y']}- missing: {', '.join(lost)} (mordecai local-tools status){C['x']}" if lost else ""))
     print(f"  experts: {', '.join(h.experts)}")
     print(f"  memory: {h.memory.stats() or 'empty'}")
     sk = h.skills.stats()
@@ -631,11 +636,16 @@ def _attack_cmd(args) -> None:
 
 
 def cmd_rules(args) -> int:
-    """mordecai rules: the rules and reference data kept in data/ (config/rules.yaml). Returns an exit code."""
-    from . import rulesets
+    """mordecai rules: the rules and reference data kept in data/ (config/rules.yaml); mordecai local-tools: the local
+    programs (config/local-tools.yaml) - status, and the optional pinned downloads. Returns an exit code."""
+    from . import localtools, rulesets
 
-    cfg = _cfg(args)
-    data, sets = rulesets.data_dir(cfg), rulesets.sources(cfg.root)
+    cfg, kind = _cfg(args), getattr(args, "kind", "rules")
+    data = rulesets.data_dir(cfg)
+    sets = localtools.catalog(cfg.root)["sets"] if kind == localtools.KIND else rulesets.sources(cfg.root)
+    if args.action == "status" and kind == localtools.KIND:
+        localtools.report(cfg)
+        return 0
     if args.action == "status":
         lk = rulesets.lock(data)
         for name, spec in sets.items():
@@ -646,7 +656,9 @@ def cmd_rules(args) -> int:
         print(f"  folder: {data}")
         return 0
     if args.action == "setup":
-        return 1 if rulesets.setup(data, sets) else 0
+        if kind == localtools.KIND:
+            print(localtools.NOTICE)
+        return 1 if rulesets.setup(data, sets, kind=kind) else 0
     if args.action == "fetch":
         names = list(sets) if args.all else args.names
         if not names or (unknown := [n for n in names if n not in sets]):
@@ -657,10 +669,13 @@ def cmd_rules(args) -> int:
             if args.all and (why := rulesets.unavailable(sets[n])):  # named on its own, it fails below with the reason
                 print(f"  skip {n}: {why}")
                 continue
-            print(f"fetching {n} from {sets[n].get('url')} ({sets[n].get('size', 'size unknown')})")
+            files = sets[n].get("files") or []
+            print(f"fetching {n}" + (f" ({len(files)} files)" if files else "") + f" ({sets[n].get('size', 'size unknown')})")
             try:
                 e = rulesets.fetch(data, n, sets[n])
-                print(f"  ok {n}: data/{e['dest']} (sha256 {e['sha256']})")
+                sha = e["sha256"] if isinstance(e["sha256"], str) else f"{len(e['sha256'])} files"
+                print(f"  ok {n}: data/{e['dest']} (sha256 {sha}" + (", each the pinned one)" if sets[n].get("require_sha256")
+                                                                       else ")"))
             except KeyboardInterrupt:  # Ctrl-C skips the set being fetched and goes on with the next
                 failed += 1
                 print(f"\n  skipped {n}: stopped (Ctrl-C); nothing was changed", file=sys.stderr)
@@ -669,21 +684,31 @@ def cmd_rules(args) -> int:
                 print(f"  FAILED {n}: {type(e).__name__}: {e}", file=sys.stderr)
         return 1 if failed else 0
     if not args.names:
-        raise ValueError(f"give the bundle file: mordecai rules {args.action} FILE")
+        raise ValueError(f"give the bundle file: mordecai {kind} {args.action} FILE")
     path = Path(args.names[0])
     if args.action == "bundle":
         if path.exists():
             raise ValueError(f"{path} exists; give another name")
         chosen, sha = rulesets.bundle(data, sets, path, args.names[1:] or None)
-        print(f"wrote {path}: {', '.join(chosen)}\nsha256 {sha}\nOn the air-gapped host: scripts/install.sh --rules-from "
-              f"{path.name}   (or: mordecai rules import {path.name} --sha256 {sha})")
+        print(f"wrote {path}: {', '.join(chosen)}\nsha256 {sha}\nOn the air-gapped host: "
+              + (f"scripts/install.sh --rules-from {path.name}   (or: " if kind == "rules" else "(")
+              + f"mordecai {kind} import {path.name} --sha256 {sha})")
         return 0
     done = rulesets.import_bundle(data, path, args.sha256)
     print(f"imported {', '.join(done)} into {data}")
     return 0
 
 
+def _venv_on_path() -> None:
+    """Programs installed into this Python environment (scripts/install.sh --forensics: vol, capa, floss, sigma) are
+    found like any other, also when the environment is not activated. After the system's own, which stay first."""
+    venv_bin, path = str(Path(sys.executable).parent), os.environ.get("PATH", "")
+    if venv_bin not in path.split(os.pathsep):
+        os.environ["PATH"] = f"{path}{os.pathsep}{venv_bin}" if path else venv_bin
+
+
 def main(argv: list[str] | None = None) -> None:
+    _venv_on_path()
     p = argparse.ArgumentParser(prog="mordecai", description=f"{NAME} - agentic security operations harness")
     p.add_argument("--config", help="harness.yaml (default $MORDECAI_CONFIG or ./config/harness.yaml)")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -768,6 +793,15 @@ def main(argv: list[str] | None = None) -> None:
                                              "bundle file (bundle, import)")
     ru.add_argument("--all", action="store_true", help="fetch: every set in config/rules.yaml")
     ru.add_argument("--sha256", default="", help="import: refuse the bundle unless it has this SHA-256")
+    ru.set_defaults(kind="rules")
+    lt = sub.add_parser("local-tools", help="local programs the forensic tools use (config/local-tools.yaml): status "
+                                            "(what is missing and how to get it); optional pinned downloads, never "
+                                            "automatic: fetch NAME, setup (asks about each), bundle FILE / import FILE")
+    lt.add_argument("action", choices=["status", "fetch", "setup", "bundle", "import"])
+    lt.add_argument("names", nargs="*", help="downloads (fetch, bundle), or the bundle file (bundle, import)")
+    lt.add_argument("--all", action="store_true", help="fetch: every download in config/local-tools.yaml")
+    lt.add_argument("--sha256", default="", help="import: refuse the bundle unless it has this SHA-256")
+    lt.set_defaults(kind="local-tools")
     a = sub.add_parser("audit-verify", help="verify a case audit chain")
     a.add_argument("--case", required=True)
     xd = sub.add_parser("export-docx", help="export a report or plan (markdown) to Word .docx")
@@ -822,7 +856,7 @@ def main(argv: list[str] | None = None) -> None:
         cmd_skills(args)
     elif args.cmd == "attack":
         _attack_cmd(args)
-    elif args.cmd == "rules":
+    elif args.cmd in ("rules", "local-tools"):
         try:
             sys.exit(cmd_rules(args))
         except ValueError as e:

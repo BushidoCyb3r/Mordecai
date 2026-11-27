@@ -310,7 +310,7 @@ forensics:
   sigma_rules_dir: ${SIGMA_RULES:-}
   capa_rules_dir: ${CAPA_RULES:-}          # capa-rules checkout (not needed for the standalone capa binary)
   volatility_symbols_dir: ${VOL_SYMBOLS:-} # Volatility 3 symbol packs (windows/ linux/ mac/); --offline too when Volatility has it (2.4+)
-  ez_tools_dir: ${EZ_TOOLS_DIR:-}          # Eric Zimmerman tools (.NET 9 build); needs `dotnet` on Linux
+  ez_tools_dir: ${EZ_TOOLS_DIR:-}          # Eric Zimmerman tools (.NET build); needs `dotnet` (.NET 10) on Linux. Empty: data/tools/ez when fetched (mordecai local-tools)
   memprocfs_python: ${MEMPROCFS_PYTHON:-}  # python with `pip install memprocfs` (default: this interpreter)
   aleapp_path: ${ALEAPP_PATH:-}            # path to aleapp.py
   ileapp_path: ${ILEAPP_PATH:-}            # path to ileapp.py

@@ -7,6 +7,7 @@ Secrets never live in YAML: reference them as ${VAR} and export them in the envi
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -302,6 +303,21 @@ def load_config(path: str | Path) -> HarnessConfig:
                         ("volatility_symbols_dir", "volatility-symbols")):
         given, fetched = str(forensics.get(key) or "").strip(), rel("../data/rules") / folder
         forensics[key] = str(rel(given)) if given else str(fetched) if fetched.is_dir() else ""
+    # optional programs fetched with `mordecai local-tools` (config/local-tools.yaml): used where harness.yaml names none
+    data = rel("../data")
+    try:
+        fetched_sets = json.loads((data / "rules.lock.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        fetched_sets = {}
+    bins = dict(forensics.get("binaries") or {})
+    for name, entry in (fetched_sets if isinstance(fetched_sets, dict) else {}).items():
+        if isinstance(entry, dict) and entry.get("bin") and not bins.get(name) and (data / entry["bin"]).is_file():
+            bins[name] = str(data / entry["bin"])
+    if not bins.get("chainsaw_mapping") and (mapping := data / "tools/chainsaw/mappings/sigma-event-logs-all.yml").is_file():
+        bins["chainsaw_mapping"] = str(mapping)
+    forensics["binaries"] = bins
+    if not str(forensics.get("ez_tools_dir") or "").strip() and (data / "tools/ez").is_dir():
+        forensics["ez_tools_dir"] = str(data / "tools/ez")
     attack_cfg = raw.get("attack") or {}
     attack_env = [x.strip() for x in os.environ.get("ATTACK_STIX", "").split(",") if x.strip()]
     attack_paths = [rel(p) for p in (attack_env or attack_cfg.get("stix") or ["../data/attack/enterprise-attack.json"])]

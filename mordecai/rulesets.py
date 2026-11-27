@@ -8,6 +8,11 @@ records what is installed: where it came from, the SHA-256 of what was downloade
 
 A download shows its progress, fails when no byte has come for STALL seconds, and fails when it takes longer than the
 set's `timeout` (seconds, config/rules.yaml): a slow or stalled link ends with a message, never a silent wait.
+
+The optional third-party programs in config/local-tools.yaml (`mordecai local-tools`) use the same machinery: a set's
+`sha256` pins what it downloads (anything else is refused before it is installed), `url` and `sha256` can differ per
+CPU architecture, `files` makes one set of several archives, and `bin` names the program in it, which must be a Linux
+program built for this machine and is the only file made executable.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ import fnmatch
 import io
 import json
 import os
+import platform
 import shutil
 import stat
 import sys
@@ -83,10 +89,11 @@ class Progress:
         self.shown = False
 
 
-def sources(config_dir: Path) -> dict[str, dict[str, Any]]:
-    """The sets in config/rules.yaml, with config/rules.local.yaml merged over them by name (enabled: false drops one)."""
+def sources(config_dir: Path, kind: str = "rules") -> dict[str, dict[str, Any]]:
+    """The sets in config/<kind>.yaml (rules, local-tools), with config/<kind>.local.yaml merged over them by name
+    (enabled: false drops one)."""
     sets: dict[str, dict[str, Any]] = {}
-    for f in (config_dir / "rules.yaml", config_dir / "rules.local.yaml"):
+    for f in (config_dir / f"{kind}.yaml", config_dir / f"{kind}.local.yaml"):
         if f.exists():
             for name, spec in ((load_yaml(f) or {}).get("sets") or {}).items():
                 sets[str(name)] = {**sets.get(str(name), {}), **(spec or {})}
@@ -126,16 +133,51 @@ def installed(data: Path, spec: dict[str, Any]) -> bool:
 
 
 def unavailable(spec: dict[str, Any]) -> str:
-    """Why a set cannot be fetched on this host yet (capa rules without capa installed), or ""."""
+    """Why a set cannot be fetched on this host (capa rules without capa installed, no download for this CPU), or ""."""
     try:
-        _url(spec)
+        for item in _items(spec):
+            _url(item)
     except ValueError as e:
         return str(e)
     return ""
 
 
+ELF_MACHINE = {"x86_64": 62, "aarch64": 183}  # e_machine in an ELF header
+
+
+def machine() -> str:
+    """This host's CPU architecture as release files name it (x86_64, aarch64)."""
+    m = platform.machine().lower()
+    return {"amd64": "x86_64", "arm64": "aarch64"}.get(m, m)
+
+
+def _for_machine(value: Any, what: str) -> Any:
+    """A spec value, or {architecture: value} for downloads that differ per CPU."""
+    if not isinstance(value, dict):
+        return value
+    if machine() not in value:
+        raise ValueError(f"no {what} for this machine ({machine()}); there is one for {', '.join(value)}")
+    return value[machine()]
+
+
+def _items(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """The downloads a set is made of: the set itself, or each of its `files` (each unpacked into a folder named after
+    its archive), which take the set's other keys (version, strip, format) unless they give their own."""
+    return [{**spec, **f} for f in spec["files"]] if spec.get("files") else [spec]
+
+
+def _check_program(path: Path) -> None:
+    """A set's program must be a Linux (ELF) program for this machine: anything else is refused, not made executable."""
+    with open(path, "rb") as fh:
+        head = fh.read(20)
+    if len(head) < 20 or head[:4] != b"\x7fELF":
+        raise ValueError(f"{path.name} is not a Linux program (ELF)")
+    if int.from_bytes(head[18:20], "little" if head[5] == 1 else "big") != ELF_MACHINE.get(machine()):
+        raise ValueError(f"{path.name} is built for another CPU than this {machine()} host")
+
+
 def _url(spec: dict[str, Any]) -> str:
-    url = str(spec["url"])
+    url = str(_for_machine(spec["url"], "download")).replace("{version}", str(spec.get("version", "")))
     if "{capa}" in url:
         from importlib.metadata import PackageNotFoundError, version
         try:
@@ -252,33 +294,56 @@ def _place(dest: Path, built: Path) -> None:
 
 def fetch(data: Path, name: str, spec: dict[str, Any], transport: Any = None,
           out: TextIO | None = None) -> dict[str, Any]:
-    """Download (or copy) one set and install it under data/, showing progress on `out` (default stderr).
+    """Download (or copy) one set and install it under data/, showing progress on `out` (default stderr). A file that
+    does not match its pinned sha256, or a `bin` that is not a program for this machine, installs nothing.
     Returns its lock entry."""
-    url = _url(spec)
+    items = _items(spec)
+    urls = [_url(i) for i in items]
     limit = float(spec.get("timeout") or TIMEOUT)
     progress = Progress(name, out)
     dest = _dest(data, spec["dest"])
-    fmt = spec.get("format") or ("zip" if url.endswith(".zip") else "tar.gz" if url.endswith((".tar.gz", ".tgz"))
-                                  else "file")
     data.mkdir(parents=True, exist_ok=True)
+    shas: list[str] = []
+    prog = ""
     with tempfile.TemporaryDirectory(dir=data, prefix=".fetch-") as tmp:
-        got = Path(tmp) / "download"
-        try:
-            _download(url, got, transport, limit, progress)
-        finally:
-            progress.end()
-        sha = sha256_file(got)
-        if fmt == "file":
-            if spec.get("check") == "attack":
-                _check_attack(got)
-            built = got
-        else:
-            built = Path(tmp) / "set"
+        built = Path(tmp) / "set"
+        for n, (item, url) in enumerate(zip(items, urls)):
+            if item.get("require_sha256") and not item.get("sha256"):
+                raise ValueError(f"{url}: no pinned sha256, so it is not downloaded")
+            got = Path(tmp) / f"download-{n}"
+            try:
+                _download(url, got, transport, limit, progress)
+            finally:
+                progress.end()
+            sha = sha256_file(got)
+            if (want := str(_for_machine(item.get("sha256") or "", "pinned sha256")).lower()) and sha != want:
+                raise ValueError(f"{url}: SHA-256 is {sha}, not the pinned {want}, so nothing was installed. The file "
+                                 "changed upstream or on the way: check the new release before you update the pin (sha256 "
+                                 "in a config/*.local.yaml)")
+            shas.append(sha)
+            fmt = item.get("format") or ("zip" if url.endswith(".zip") else "tar.gz" if url.endswith((".tar.gz", ".tgz"))
+                                         else "file")
+            if fmt == "file":
+                if item.get("check") == "attack":
+                    _check_attack(got)
+                built = got
+                continue
+            into = built / PurePosixPath(url.split("?")[0]).name.split(".")[0] if len(items) > 1 else built
             progress.note("extracting")
-            if not _extract(got, fmt, built, str(spec.get("strip") or "")):
+            if not _extract(got, fmt, into, str(item.get("strip") or "")):
                 raise ValueError(f"{url}: no files in the archive")
+        if spec.get("bin"):
+            pattern = str(spec["bin"]).replace("{version}", str(spec.get("version", "")))
+            hits = sorted(p for p in built.rglob(pattern) if p.is_file())
+            if not hits:
+                raise ValueError(f"{name}: no program {pattern} in the download")
+            _check_program(hits[0])
+            os.chmod(hits[0], 0o755)
+            prog = (PurePosixPath(str(spec["dest"])) / hits[0].relative_to(built).as_posix()).as_posix()
         _place(dest, built)
-    entry = {"dest": spec["dest"], "url": url, "sha256": sha, "fetched": datetime.now(timezone.utc).isoformat()[:19] + "Z"}
+    entry = {"dest": spec["dest"], "url": urls[0] if len(urls) == 1 else urls,
+             "sha256": shas[0] if len(shas) == 1 else shas, "fetched": datetime.now(timezone.utc).isoformat()[:19] + "Z",
+             **({"version": str(spec["version"])} if spec.get("version") else {}), **({"bin": prog} if prog else {})}
     _save_lock(data, {**lock(data), name: entry})
     return entry
 
@@ -321,6 +386,15 @@ def import_bundle(data: Path, path: Path, sha256: str = "") -> list[str]:
             built = Path(tmp) / "set"
             if not _extract(Path(path), "tar.gz", built, under=f"data/{entry['dest']}"):
                 raise ValueError(f"{path}: {name} has no files in the bundle")
+            if entry.get("bin"):  # a program: checked again here, and the only file made executable
+                try:
+                    rel = PurePosixPath(str(entry["bin"])).relative_to(PurePosixPath(str(entry["dest"])))
+                except ValueError:
+                    rel = PurePosixPath("..")
+                if ".." in rel.parts or not (built.joinpath(*rel.parts)).is_file():
+                    raise ValueError(f"{path}: {name}'s program {entry['bin']} is not in the set")
+                _check_program(built.joinpath(*rel.parts))
+                os.chmod(built.joinpath(*rel.parts), 0o755)
             _place(dest, built)  # a one-file set (attack/enterprise-attack.json) was extracted as that file
         entry["imported"] = datetime.now(timezone.utc).isoformat()[:19] + "Z"
     _save_lock(data, {**lock(data), **entries})
@@ -328,7 +402,8 @@ def import_bundle(data: Path, path: Path, sha256: str = "") -> list[str]:
 
 
 def setup(data: Path, sets: dict[str, dict[str, Any]], ask: Callable[[str], str] = input,
-          say: Callable[[str], None] = print, transport: Any = None, out: TextIO | None = None) -> int:
+          say: Callable[[str], None] = print, transport: Any = None, out: TextIO | None = None,
+          kind: str = "rules") -> int:
     """The installer's decision gates: for each set not installed yet, ask whether to fetch it now (Enter takes the
     set's default). A set this host cannot fetch yet is passed over with the reason, and not asked about. Ctrl-C
     during a download skips that set; at a question it ends the questions. A source that cannot be reached ends the
@@ -347,22 +422,22 @@ def setup(data: Path, sets: dict[str, dict[str, Any]], ask: Callable[[str], str]
         try:
             a = ask(q).strip().lower()
         except (KeyboardInterrupt, EOFError):
-            say("\n  stopped: no more sets asked about (later: mordecai rules setup)")
+            say(f"\n  stopped: no more sets asked about (later: mordecai {kind} setup)")
             return failed
         if not (a.startswith("y") or (not a and default)):
-            say(f"  skip  {name} (later: mordecai rules fetch {name})")
+            say(f"  skip  {name} (later: mordecai {kind} fetch {name})")
             continue
         try:
             fetch(data, name, spec, transport, out)
             say(f"  ok    {name}: {_dest(data, spec['dest'])}")
         except KeyboardInterrupt:
             failed += 1
-            say(f"\n  skip  {name}: stopped (Ctrl-C); nothing was changed. Later: mordecai rules fetch {name}")
+            say(f"\n  skip  {name}: stopped (Ctrl-C); nothing was changed. Later: mordecai {kind} fetch {name}")
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ProxyError) as e:  # no route to the source
             say(f"  FAIL  {name}: cannot reach {spec.get('url')}: {type(e).__name__}: {e}")
-            say("  No internet here? Make a bundle on a connected host (mordecai rules fetch, then mordecai rules "
-                "bundle FILE) and run scripts/install.sh --rules-from FILE here, or point url at a local mirror in "
-                "config/rules.local.yaml.")
+            say(f"  No internet here? Make a bundle on a connected host (mordecai {kind} fetch, then mordecai {kind} "
+                f"bundle FILE) and run mordecai {kind} import FILE here, or point url at a local mirror in "
+                f"config/{kind}.local.yaml.")
             return failed + 1
         except (ValueError, OSError, httpx.HTTPError) as e:  # this set only: a stall, too slow, a 404, a bad archive
             failed += 1

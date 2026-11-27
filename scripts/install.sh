@@ -10,7 +10,8 @@
 #   3. creates config/.env (mode 600) from config/env.example, config/secrets/ (700), the site scope file
 #      config/policy.local.yaml (600), and the evidence, vault, cases and memory folders
 #   4. checks the evidence vault mount (noexec), the system tools it uses (openssl, bwrap) and which local
-#      forensic tools are installed (it installs none)
+#      forensic tools the harness can use, with how to get each missing one (it installs none; the optional
+#      third-party downloads in config/local-tools.yaml come only on request: mordecai local-tools fetch NAME)
 #   5. asks about each set of rules and reference data (config/rules.yaml: ATT&CK, YARA, Sigma, capa rules, Volatility
 #      symbols, nuclei templates) and fetches the ones you choose into data/ once - or imports a bundle on an
 #      air-gapped host (--rules-from) - so nothing is downloaded while the harness runs
@@ -254,12 +255,12 @@ fi
 
 # ---------------------------------------------------------------------------------------------------------------
 step "6. Local forensic tools (optional - none are installed by this script)"
-have=() missing=()
-for t in file strings yara vol log2timeline.py tshark zeek capa floss exiftool hayabusa chainsaw sigma fls bulk_extractor dotnet; do
-  if command -v "$t" >/dev/null 2>&1 || [ -x ".venv/bin/$t" ]; then have+=("$t"); else missing+=("$t"); fi
-done
-[ ${#have[@]} -gt 0 ] && ok "found: ${have[*]}"
-[ ${#missing[@]} -gt 0 ] && info "not found: ${missing[*]}"
+# what the harness itself can use, and how to get each missing one (config/local-tools.yaml); it only reports
+if [ -x .venv/bin/mordecai ]; then
+  .venv/bin/mordecai local-tools status || warn "could not list the local tools (see above)"
+else
+  warn "skipping: mordecai is not installed"
+fi
 info "Install only what your team needs, after clearing it with your security team (SETUP.md section 8)."
 info "--forensics installs the Python ones (YARA, Volatility 3, capa, FLOSS, MemProcFS, sigma-cli) into .venv."
 
