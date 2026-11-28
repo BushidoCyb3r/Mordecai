@@ -1,8 +1,8 @@
 """Accessibility: WCAG AA contrast of the dashboard's colors, and a keyboard-only walk-through in a real browser.
 
 The browser test drives headless Chrome over its DevTools pipe (--remote-debugging-pipe, standard library only),
-against a test dashboard with a long conversation, a cited report and a pending approval. It checks the rendered page
-in both themes: every control has a name, ids are unique, ARIA references resolve, no control sits inside another,
+against a test dashboard with a long conversation, a cited report and a pending approval. It checks the rendered page:
+every control has a name, ids are unique, ARIA references resolve, no control sits inside another,
 text contrast meets AA, and Tab, arrow keys, Enter and Escape reach and operate everything with a visible focus ring.
 """
 
@@ -29,16 +29,11 @@ STATIC = ROOT / "mordecai" / "web" / "static"
 
 
 # ---------------------------------------------------------------------------
-# WCAG contrast of the color tokens (both themes)
+# WCAG contrast of the color tokens
 # ---------------------------------------------------------------------------
-def _tokens() -> tuple[dict[str, str], dict[str, str]]:
-    css = (STATIC / "app.css").read_text()
-
-    def block(sel: str) -> dict[str, str]:
-        m = re.search(re.escape(sel) + r"\s*\{(.*?)\n\}", css, re.S)
-        return dict(re.findall(r"--([\w-]+):\s*([^;]+);", m.group(1)))
-    dark = block(":root")
-    return dark, {**dark, **block(':root[data-theme="light"]')}
+def _tokens() -> dict[str, str]:
+    m = re.search(r":root\s*\{(.*?)\n\}", (STATIC / "app.css").read_text(), re.S)
+    return dict(re.findall(r"--([\w-]+):\s*([^;]+);", m.group(1)))
 
 
 def _rgba(v: str) -> tuple[float, ...]:
@@ -71,19 +66,18 @@ TEXT_PAIRS = [("text", ["bg", "bg-2", "panel", "elev", "hover"]), ("text-2", ["b
 
 
 def test_color_tokens_meet_wcag_aa():
-    failures = []
-    for theme, t in zip(("dark", "light"), _tokens()):
-        checks = [(fg, bgs, 4.5) for fg, bgs in TEXT_PAIRS] + [("#ffffff", ["red"], 4.5),  # white on the primary red
-                                                                ("red", ["bg", "bg-2", "panel", "elev"], 3.0)]  # focus ring
-        for fg, bgs, need in checks:
-            for b in bgs:
-                for base in ("panel", "bg"):
-                    bc = _rgba(t[b])
-                    bc = _over(bc, _rgba(t[base])) if bc[3] < 1 else bc
-                    fc = _rgba(fg if fg.startswith("#") else t[fg])
-                    fc = _over(fc, bc) if fc[3] < 1 else fc
-                    if (r := contrast(fc, bc)) < need:
-                        failures.append(f"{theme}: {fg} on {b} (over {base}) {r:.2f} < {need}")
+    failures, t = [], _tokens()
+    checks = [(fg, bgs, 4.5) for fg, bgs in TEXT_PAIRS] + [("#ffffff", ["red"], 4.5),  # white on the primary red
+                                                            ("red", ["bg", "bg-2", "panel", "elev"], 3.0)]  # focus ring
+    for fg, bgs, need in checks:
+        for b in bgs:
+            for base in ("panel", "bg"):
+                bc = _rgba(t[b])
+                bc = _over(bc, _rgba(t[base])) if bc[3] < 1 else bc
+                fc = _rgba(fg if fg.startswith("#") else t[fg])
+                fc = _over(fc, bc) if fc[3] < 1 else fc
+                if (r := contrast(fc, bc)) < need:
+                    failures.append(f"{fg} on {b} (over {base}) {r:.2f} < {need}")
     assert not failures, "\n".join(failures)
 
 
@@ -362,12 +356,9 @@ def test_keyboard_walkthrough_and_rendered_audit(tmp_path, monkeypatch):
         chrome.js("api('/api/message', {text: 'contain ws01'}).then(() => true)")
         chrome.wait("document.getElementById('announcer').textContent.includes('Approval needed')")
 
-        # the rendered page, dark then light: names, ids, ARIA references, nesting, contrast
-        for theme in ("dark", "light"):
-            chrome.js(f"document.documentElement.dataset.theme = '{theme}'; true")
-            time.sleep(0.2)
-            found = chrome.js("__a11y.audit()")
-            assert not any(found.values()), f"{theme}: {json.dumps(found, indent=1)}"
+        # the rendered page: names, ids, ARIA references, nesting, contrast
+        found = chrome.js("__a11y.audit()")
+        assert not any(found.values()), json.dumps(found, indent=1)
 
         # keyboard only: Tab through the page; every stop is visible, named and shows focus
         # start from the top of the page (Chrome continues Tab from the last focused element otherwise)

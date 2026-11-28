@@ -4,11 +4,6 @@
 "use strict";
 (function () {
   const $ = (id) => document.getElementById(id);
-  try {
-    const t = localStorage.getItem("ca.theme");
-    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
-  } catch (e) { /* storage unavailable */ }
-
   const params = new URLSearchParams(location.search);
   const linkToken = params.get("token") || "";
   if (linkToken) {

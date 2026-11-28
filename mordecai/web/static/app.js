@@ -68,7 +68,6 @@ const ICONS = {
   menu: [["path", { d: "M4 7h16" }], ["path", { d: "M4 12h16" }], ["path", { d: "M4 17h16" }]],
   star: [["path", { d: "m12 4 2.5 5.2 5.5.8-4 3.9.9 5.6-4.9-2.7-4.9 2.7.9-5.6-4-3.9 5.5-.8z" }]],
   keyboard: [["rect", { x: 3, y: 6, width: 18, height: 12, rx: 2 }], ["path", { d: "M7 10h.01M11 10h.01M15 10h.01M7 14h10" }]],
-  sun: [["circle", { cx: 12, cy: 12, r: 4 }], ["path", { d: "M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4" }]],
   external: [["path", { d: "M14 4h6v6" }], ["path", { d: "M20 4l-9 9" }], ["path", { d: "M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" }]],
   clock: [["circle", { cx: 12, cy: 12, r: 9 }], ["path", { d: "M12 7v5l3 2" }]],
   download: [["path", { d: "M12 4v11" }], ["path", { d: "m7 10 5 5 5-5" }], ["path", { d: "M5 20h14" }]],
@@ -368,12 +367,6 @@ function statusChip(status, secs) {
 }
 function tierChip(tier) { return tier && tier !== "auto" ? el("span", { class: "tier " + tier, text: tier }) : null; }
 
-/* ================================================================ theme */
-function applyTheme(mode) {
-  const resolved = mode === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : mode;
-  document.documentElement.dataset.theme = resolved === "light" ? "light" : "dark";
-  setPref("theme", mode);
-}
 /* ================================================================ sidebar */
 function navItem(view, ic, label, extra) {
   return el("a", { class: "navi" + (S.view === view ? " on" : ""), href: view === "ops" ? "#/" : "#/" + view, "aria-current": S.view === view ? "page" : null },
@@ -2020,12 +2013,8 @@ const PAGES = {
   async settings(root) {
     try { applyState(await api("/api/state")); } catch (e) { /* render what we have */ } // picks up edits to models.yaml
     const st = S.st;
-    root.append(pageHead("Settings", "The theme is stored in this browser. Models live in config/models.yaml; other server settings in config/harness.yaml and config/policy.yaml."));
-    const mode = pref("theme", "dark");
-    const seg = el("div", { class: "seg", role: "group", "aria-label": "Theme" }, [["dark", "Dark"], ["light", "Light"], ["system", "Match system"]].map(([v, label]) =>
-      el("button", { type: "button", class: mode === v ? "on" : "", "aria-pressed": String(mode === v), onclick: () => { applyTheme(v); renderPage("settings"); } }, label)));
+    root.append(pageHead("Settings", "Models live in config/models.yaml; other server settings in config/harness.yaml and config/policy.yaml."));
     root.append(el("div", { class: "card form-grid" },
-      el("span", { class: "label", text: "Theme" }), el("div", {}, seg),
       el("span", { class: "label", text: "Analyst" }), el("span", { text: st.operator }),
       el("span", { class: "label", text: "Case" }), el("span", { text: st.case.id }),
       el("span", { class: "label", text: "Posture" }), el("span", { text: st.posture.toUpperCase() + " (set at start with --posture)" }),
@@ -2325,7 +2314,6 @@ function paletteItems() {
   add("Actions", "panel", "Toggle case panel", () => { go("ops"); toggleInsp(); }, "Ctrl .");
   add("Actions", "refresh", "Retrospective", runRetro, "", "retro reflect skills");
   add("Actions", "star", "Rate this session", rateDialog, "", "rating feedback");
-  add("Actions", "sun", pref("theme", "dark") === "light" ? "Switch to dark theme" : "Switch to light theme", () => applyTheme(pref("theme", "dark") === "light" ? "dark" : "light"), "", "theme appearance");
   add("Actions", "keyboard", "Keyboard shortcuts", showShortcuts, "Ctrl /");
   add("Actions", "logout", "Sign out", signOut);
   for (const [v, ic, label] of [["ops", "chat", "Operations"], ["learning", "star", "Learning"], ["skills", "book", "Skills"], ["memory", "db", "Memory"], ["audit", "file", "Audit log"],
@@ -2418,7 +2406,6 @@ function watchActivity() {
   for (const ev of ["pointerdown", "keydown", "wheel", "touchstart"]) addEventListener(ev, ping, { passive: true, capture: true });
 }
 (async function boot() {
-  applyTheme(pref("theme", "dark"));
   if (innerWidth < 1180) S.insp.open = false;
   buildOps();
   try {

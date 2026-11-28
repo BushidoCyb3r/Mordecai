@@ -144,12 +144,11 @@ single-page app (no CDNs, system fonts), so it works air-gapped, and nothing rel
 - **Keyboard.** Ctrl+K command palette (conversations, subagents, playbooks, pages, models), Ctrl+Shift+O
   new conversation, Ctrl+. case panel, Ctrl+/ shortcuts, `/` to focus the message box, Esc to close. The first
   Tab stop skips to the message box; arrow keys move between tabs and menu items.
-- **Accessibility.** Text meets WCAG AA contrast in both themes, and every control can be reached and used from
+- **Accessibility.** Text meets WCAG AA contrast, and every control can be reached and used from
   the keyboard with a visible focus ring. Redraws keep your focus where it was, dialogs return it when they close,
   and a new approval is announced once to screen readers. `tests/test_accessibility.py` checks the colors, and
   drives headless Chrome through a keyboard-only walk-through and a rendered-page audit (names, ARIA references,
-  contrast in both themes) whenever Chrome is installed.
-- **Themes.** Dark (default), light, or match the system, from Settings or the palette.
+  contrast) whenever Chrome is installed.
 - **Security.** Stricter than a typical local dashboard, because this one approves response actions:
   - Signing in takes both the access token, which is new at every start, and the dashboard account's username
     and password, even on localhost. The account is created once on the host (the first `scripts/start.sh` asks;
