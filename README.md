@@ -296,7 +296,7 @@ stderr goes to `cases/<id>/logs/`.
 | `elastic` | Elasticsearch / Elastic Security, API key. **Tested against a live 9.x cluster** (Kibana detection alerts verified on mocks only) | query_string, DSL, ES\|QL, EQL sequences, alerts + summary, stacking, IOC sweep, index inventory, Sigma back-test |
 | `velociraptor` + `velociraptor_admin` | gRPC API (`config api_client`). **Tested against a live 0.77.3 server** | 19 tools split by privilege. Investigator key: clients, client flow history, artifact search and detail, collect (wait + results), flow status/logs/results/uploads, labels, cancel, hunts, memory acquisition (Windows). Admin key: **evidence download with a calculated SHA-256 and reported size comparison**, quarantine/unquarantine (Windows/Linux/macOS), server VQL |
 | `misp` | MISP REST API, auth key. **Tested against a live 2.5.37 instance** | IOC lookup across events (threat level, galaxy/ATT&CK tags), **feed caches** (cached-only feeds such as blocklists and Tor exit nodes, with each cache's age) and **warninglists** (known-benign; says when none are enabled), feed inventory, attribute pull by type/tag/age for sweeps, event search and detail, sightings. Events it creates are always unpublished and org-only |
-| `archer` | Archer REST API (HTTPS, session login), a **Viewer** account | Read-only: overview counts, per-host roll-up, campaigns (one destination, many sources), finding search (Lucene `q`, IP/CIDR, time, score, IOC), finding detail with beacon interval statistics, the raw Zeek records behind a finding, 30-day pair history, sensor health, analysis status. See the Archer notes below |
+| `archer` | Archer REST API (HTTPS, session login), a **Viewer** account. **Tested against a live 0.77.0 instance** | Read-only: overview counts, per-host roll-up, campaigns (one destination, many sources), finding search (Lucene `q`, IP/CIDR, time, score, IOC), finding detail with beacon interval statistics, the raw Zeek records behind a finding, 30-day pair history, sensor health, analysis status. See the Archer notes below |
 | `opencti` | OpenCTI GraphQL, read-only token | IOC lookup (observables, indicators, score, kill chain, related intrusion sets/malware), entity search (actors, malware, campaigns, ATT&CK patterns, reports), relationships, read-only GraphQL escape hatch (mutations refused) |
 
 Use least-privilege accounts. For example, a read-only ES role, a Splunk role without `delete_by_keyword`,
@@ -762,12 +762,12 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md): privately, through Gi
 - **Live-verified:** Velociraptor (except quarantine, which was deliberately not run on the dev
   workstation), Security Onion 3.4.0 and Elastic (read-only API key; including the Sigma back-test, detection
   coverage and alert techniques), MISP 2.5.37 (the read tools, and the two writes on a throwaway event:
-  `tests/test_misp_live.py`, with `MORDECAI_LIVE_MISP_WRITE=1` for the writes), sigma-cli and capa.
+  `tests/test_misp_live.py`, with `MORDECAI_LIVE_MISP_WRITE=1` for the writes), Archer 0.77.0
+  (`tests/test_archer_live.py`), sigma-cli and capa.
 - **Untested beyond its safety check:** Splunk. Only the SPL command check (read-only commands, allowed macros)
   has tests; search and response handling have never run against Splunk or a mock of it.
 - **Tested against mock servers or stand-in tools only:** OpenCTI (a mock HTTP server built from its documented API
-  and the official pycti queries), Archer (a stand-in HTTPS server built from its API
-  contract; `tests/test_archer_live.py` runs the acceptance checks against yours), Elastic Security detection alerts, plus the
+  and the official pycti queries), Elastic Security detection alerts, plus the
   Zimmerman tools, FLOSS, MemProcFS and ALEAPP/iLEAPP stand-ins. Validate against your instances.
 - SOC-native Security Onion features (cases, PCAP jobs, OQL, managing detections) need SO Pro's Connect API /
   official MCP server. The harness never writes rules to Security Onion: new detections stay in the case for you to
