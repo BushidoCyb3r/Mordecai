@@ -1699,15 +1699,21 @@ function go(view, push = true) {
   $("view-page").hidden = view === "ops";
   $("side").classList.remove("open");
   renderSide(); renderInsp();
-  if (view !== "ops") renderPage(view);
+  if (view !== "ops") { clear($("view-page")); renderPage(view); } // a page you go to opens at the top
 }
 async function renderPage(view) {
   const box = $("view-page");
   const focus = captureFocus(box);
+  // A redraw keeps the reader's place; one that lands while another is still loading takes over the place it was keeping.
+  const old = box.querySelector(".page"), keep = old ? (old.keep ?? old.scrollTop) : 0;
   const root = clear(box);
   const inner = el("div", { class: "page-inner" });
-  root.append(el("div", { class: "page" }, inner));
+  const page = el("div", { class: "page" }, inner);
+  page.keep = keep;
+  root.append(page);
   try { await PAGES[view](inner); } catch (e) { inner.append(el("div", { class: "empty", text: "Could not load this page: " + e.message })); }
+  page.scrollTop = keep;
+  delete page.keep;
   restoreFocus(box, focus);
 }
 function pageHead(title, sub, ...actions) {

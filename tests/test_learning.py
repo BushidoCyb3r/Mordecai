@@ -229,6 +229,22 @@ def test_learning_page_in_the_browser(tmp_path, monkeypatch):
         chrome.wait("document.querySelectorAll('#learn-panel .card').length >= 2 && !!document.querySelector('#learn-panel .diff')")
         panel = chrome.js("document.getElementById('learn-panel').textContent")
         assert "evtxhunt #2" in panel and "Blocked tools (1)" in panel  # the upgrade waits; the changed binary is blocked
+        # picking another skill change redraws the page in place: the reader stays at the bottom, by the list
+        h.skills.propose("dns-tunnel-check", "network_analyst", "Check long DNS names", "1. Look at query lengths.", "second change")
+        chrome.send("Emulation.setDeviceMetricsOverride", {"width": 1400, "height": 500, "deviceScaleFactor": 1, "mobile": False})
+        chrome.js("renderPage('learning').then(() => true)")
+        assert chrome.js("document.querySelectorAll('#learn-panel .prop').length") == 2
+        bottom = chrome.js("(p => (p.scrollTop = p.scrollHeight, p.scrollTop))(document.querySelector('.page'))")
+        assert bottom > 0
+        other = chrome.js("(b => (b.click(), b.querySelector('.mono').textContent))(document.querySelector('#learn-panel .prop:not(.on)'))")
+        chrome.wait(f"document.querySelector('#learn-panel .prop.on .mono').textContent === '{other}'")
+        assert chrome.js("(p => p.scrollHeight - p.scrollTop - p.clientHeight)(document.querySelector('.page'))") < 2
+        chrome.js("go('memory'); true")
+        chrome.wait("!!document.querySelector('.page .seg')")
+        chrome.js("go('learning'); true")
+        chrome.wait("!!document.getElementById('learn-tab-all')")
+        assert chrome.js("document.querySelector('.page').scrollTop") == 0  # going to a page still opens it at the top
+        chrome.send("Emulation.setDeviceMetricsOverride", {"width": 1400, "height": 900, "deviceScaleFactor": 1, "mobile": False})
         for theme in ("dark", "light"):
             chrome.js(f"document.documentElement.dataset.theme = '{theme}'; true")
             time.sleep(0.3)  # the color transition
